@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 226, 232, 240;
+  --background-start-rgb: 10, 10, 12; /* Very dark, almost black */
+  --background-end-rgb: 23, 23, 28;   /* Slightly lighter dark */
+  --accent-glow: 245, 158, 11;        /* Amber-500 for the "light" */
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(
+      to bottom right,
+      rgb(var(--background-start-rgb)),
+      rgb(var(--background-end-rgb))
+    );
+  min-height: 100vh;
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply bg-white/5 backdrop-blur-md border border-white/10 shadow-xl;
+  }
+  
+  .glass-input {
+    @apply bg-black/20 border border-white/10 text-white placeholder-gray-500 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 transition-all;
+  }
+
+  .glow-text {
+    text-shadow: 0 0 20px rgba(245, 158, 11, 0.5);
+  }
+
+  .glow-box {
+    box-shadow: 0 0 40px -10px rgba(245, 158, 11, 0.15);
+  }
+  
+  /* Animation for the "fog" effect */
+  .fog-gradient {
+    background: radial-gradient(circle at 50% 0%, rgba(255,255,255,0.03) 0%, transparent 70%);
+  }
+}
