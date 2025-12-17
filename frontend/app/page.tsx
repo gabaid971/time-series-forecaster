@@ -323,43 +323,39 @@ export default function ForecastingPage() {
       <div className="fixed inset-0 pointer-events-none fog-gradient z-0" />
       <div className="fixed top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-amber-500/10 blur-[120px] rounded-full pointer-events-none z-0" />
 
-      <div className="relative z-10 max-w-6xl mx-auto p-6">
+      <div className="relative z-10 max-w-6xl mx-auto p-3 sm:p-6">
         
         {/* Header */}
         <header className="flex items-center justify-between mb-12 pt-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-400 to-orange-600 flex items-center justify-center shadow-lg shadow-amber-500/20">
-              <Activity className="text-white w-6 h-6" />
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg bg-gradient-to-br from-amber-400 to-orange-600 flex items-center justify-center shadow-lg shadow-amber-500/20">
+              <Activity className="text-white w-5 h-5 sm:w-6 sm:h-6" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-white tracking-tight">Time Series <span className="text-amber-500">Studio</span></h1>
-              <p className="text-slate-400 text-xs uppercase tracking-widest">Forecasting Pipeline</p>
+              <h1 className="text-lg sm:text-2xl font-bold text-white tracking-tight">Time Series <span className="text-amber-500">Studio</span></h1>
+              <p className="text-slate-400 text-[10px] sm:text-xs uppercase tracking-widest hidden sm:block">Forecasting Pipeline</p>
             </div>
-          </div>
-          <div className="flex gap-4 text-sm text-slate-400">
-            <span className="hover:text-white cursor-pointer transition">Docs</span>
-            <span className="hover:text-white cursor-pointer transition">History</span>
           </div>
         </header>
 
         {/* Stepper */}
-        <div className="mb-12">
-          <div className="flex items-center justify-between relative">
+        <div className="mb-6 sm:mb-12">
+          <div className="flex items-center justify-between relative px-4 sm:px-0">
             <div className="absolute left-0 top-1/2 w-full h-0.5 bg-white/10 -z-10" />
             {[1, 2, 3].map((i) => (
               <div 
                 key={i}
                 onClick={() => i < step ? setStep(i) : null}
-                className={`relative flex flex-col items-center gap-2 cursor-pointer group ${step === i ? 'scale-110' : 'scale-100'} transition-all duration-300`}
+                className={`relative flex flex-col items-center gap-1 sm:gap-2 cursor-pointer group ${step === i ? 'scale-105 sm:scale-110' : 'scale-100'} transition-all duration-300`}
               >
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
+                <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
                   step >= i 
                     ? 'bg-amber-500 border-amber-500 text-black shadow-[0_0_20px_rgba(245,158,11,0.4)]' 
                     : 'bg-slate-900 border-white/20 text-slate-500 group-hover:border-white/40'
                 }`}>
-                  {i === 1 ? <Upload size={18} /> : i === 2 ? <Settings size={18} /> : <BarChart3 size={18} />}
+                  {i === 1 ? <Upload size={16} /> : i === 2 ? <Settings size={16} /> : <BarChart3 size={16} />}
                 </div>
-                <span className={`text-xs font-medium tracking-wider ${step >= i ? 'text-amber-500' : 'text-slate-600'}`}>
+                <span className={`text-[10px] sm:text-xs font-medium tracking-wider ${step >= i ? 'text-amber-500' : 'text-slate-600'}`}>
                   {i === 1 ? 'DATA' : i === 2 ? 'STRATEGY' : 'RESULTS'}
                 </span>
               </div>
@@ -368,8 +364,8 @@ export default function ForecastingPage() {
         </div>
 
         {/* Main Content Area */}
-        <div className="glass-panel rounded-2xl p-1 min-h-[600px] glow-box transition-all duration-500">
-          <div className="bg-black/40 rounded-xl min-h-[600px] p-8 backdrop-blur-sm">
+        <div className="glass-panel rounded-xl sm:rounded-2xl p-1 min-h-[400px] sm:min-h-[600px] glow-box transition-all duration-500">
+          <div className="bg-black/40 rounded-lg sm:rounded-xl min-h-[400px] sm:min-h-[600px] p-4 sm:p-8 backdrop-blur-sm">
             
             {/* STEP 1: DATA */}
             {step === 1 && (
@@ -389,18 +385,18 @@ export default function ForecastingPage() {
                         onDragLeave={onDragLeave}
                         onDrop={onDrop}
                         onClick={() => fileInputRef.current?.click()}
-                        className={`border-2 border-dashed rounded-2xl p-16 text-center transition-all cursor-pointer group ${
+                        className={`border-2 border-dashed rounded-xl sm:rounded-2xl p-8 sm:p-16 text-center transition-all cursor-pointer group ${
                           isDragging 
                             ? 'border-amber-500 bg-amber-500/10 scale-105' 
                             : 'border-white/10 hover:border-amber-500/50 hover:bg-white/5'
                         }`}
                       >
-                        <div className="w-20 h-20 bg-white/5 rounded-full flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform duration-300">
-                          <Upload className={`w-10 h-10 transition-colors ${isDragging ? 'text-amber-500' : 'text-slate-400 group-hover:text-amber-500'}`} />
+                        <div className="w-14 h-14 sm:w-20 sm:h-20 bg-white/5 rounded-full flex items-center justify-center mx-auto mb-4 sm:mb-6 group-hover:scale-110 transition-transform duration-300">
+                          <Upload className={`w-7 h-7 sm:w-10 sm:h-10 transition-colors ${isDragging ? 'text-amber-500' : 'text-slate-400 group-hover:text-amber-500'}`} />
                         </div>
-                        <h3 className="text-xl font-semibold text-white mb-2">Upload Time Series</h3>
-                        <p className="text-slate-400 mb-8">Drag & drop CSV file here</p>
-                        <button className="px-6 py-3 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium transition-all border border-white/10">
+                        <h3 className="text-lg sm:text-xl font-semibold text-white mb-2">Upload Time Series</h3>
+                        <p className="text-slate-400 text-sm sm:text-base mb-4 sm:mb-8">Drag & drop CSV file here</p>
+                        <button className="px-4 py-2 sm:px-6 sm:py-3 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium transition-all border border-white/10 text-sm sm:text-base">
                           Browse Files
                         </button>
                       </div>
@@ -436,23 +432,23 @@ export default function ForecastingPage() {
                       targetColumn={data.targetColumn} 
                     />
 
-                    <div className="grid grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                       <div className="space-y-2">
-                        <label className="text-sm text-slate-400">Date Column</label>
+                        <label className="text-xs sm:text-sm text-slate-400">Date Column</label>
                         <select 
                           value={data.dateColumn}
                           onChange={(e) => setData({...data, dateColumn: e.target.value})}
-                          className="w-full bg-black/20 border border-white/10 rounded-lg p-3 text-white focus:border-amber-500 outline-none [&>option]:bg-slate-900 [&>option]:text-white"
+                          className="w-full bg-black/20 border border-white/10 rounded-lg p-2 sm:p-3 text-sm sm:text-base text-white focus:border-amber-500 outline-none [&>option]:bg-slate-900 [&>option]:text-white"
                         >
                           {data.columns.map(col => <option key={col} value={col}>{col}</option>)}
                         </select>
                       </div>
                       <div className="space-y-2">
-                        <label className="text-sm text-slate-400">Target Column</label>
+                        <label className="text-xs sm:text-sm text-slate-400">Target Column</label>
                         <select 
                           value={data.targetColumn}
                           onChange={(e) => setData({...data, targetColumn: e.target.value})}
-                          className="w-full bg-black/20 border border-white/10 rounded-lg p-3 text-white focus:border-amber-500 outline-none [&>option]:bg-slate-900 [&>option]:text-white"
+                          className="w-full bg-black/20 border border-white/10 rounded-lg p-2 sm:p-3 text-sm sm:text-base text-white focus:border-amber-500 outline-none [&>option]:bg-slate-900 [&>option]:text-white"
                         >
                           {data.columns.map(col => <option key={col} value={col}>{col}</option>)}
                         </select>
@@ -538,9 +534,9 @@ export default function ForecastingPage() {
                     <div className="flex justify-end pt-4">
                       <button 
                         onClick={() => setStep(2)}
-                        className="flex items-center gap-2 px-8 py-3 bg-amber-500 hover:bg-amber-400 text-black font-bold rounded-lg shadow-[0_0_20px_rgba(245,158,11,0.3)] transition-all"
+                        className="flex items-center gap-2 px-4 py-2 sm:px-8 sm:py-3 bg-amber-500 hover:bg-amber-400 text-black font-bold rounded-lg shadow-[0_0_20px_rgba(245,158,11,0.3)] transition-all text-sm sm:text-base"
                       >
-                        Confirm Data <CheckCircle2 size={18} />
+                        Confirm Data <CheckCircle2 size={16} />
                       </button>
                     </div>
                   </div>
@@ -550,13 +546,13 @@ export default function ForecastingPage() {
 
             {/* STEP 2: MODELS & CONFIG */}
             {step === 2 && (
-              <div className="grid grid-cols-12 gap-8 h-full animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="flex flex-col lg:grid lg:grid-cols-12 gap-6 lg:gap-8 h-full animate-in fade-in slide-in-from-bottom-4 duration-500">
                 
                 {/* Left: Model Palette */}
-                <div className="col-span-4 space-y-4 border-r border-white/10 pr-8">
-                  <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-6">Model Library</h3>
+                <div className="lg:col-span-4 space-y-3 lg:space-y-4 lg:border-r border-white/10 lg:pr-8">
+                  <h3 className="text-xs sm:text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4 lg:mb-6">Model Library</h3>
                   
-                  <div className="space-y-3">
+                  <div className="grid grid-cols-2 lg:grid-cols-1 gap-2 lg:space-y-3">
                     {[
                       { id: 'LINEAR_REGRESSION', name: 'Linear Regression', desc: 'Simple Baseline', icon: '📏' },
                       { id: 'ARIMA', name: 'ARIMA', desc: 'Statistical Baseline', icon: '📊' },
@@ -567,17 +563,17 @@ export default function ForecastingPage() {
                       <button 
                         key={m.id}
                         onClick={() => addModel(m.id as ModelType)}
-                        className="w-full text-left p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 hover:border-amber-500/30 transition-all group"
+                        className="w-full text-left p-3 lg:p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 hover:border-amber-500/30 transition-all group"
                       >
                         <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <span className="text-xl grayscale group-hover:grayscale-0 transition-all">{m.icon}</span>
+                          <div className="flex items-center gap-2 lg:gap-3">
+                            <span className="text-lg lg:text-xl grayscale group-hover:grayscale-0 transition-all">{m.icon}</span>
                             <div>
-                              <div className="font-medium text-slate-200 group-hover:text-white">{m.name}</div>
-                              <div className="text-xs text-slate-500">{m.desc}</div>
+                              <div className="font-medium text-xs lg:text-base text-slate-200 group-hover:text-white">{m.name}</div>
+                              <div className="text-[10px] lg:text-xs text-slate-500 hidden sm:block">{m.desc}</div>
                             </div>
                           </div>
-                          <Plus size={16} className="text-slate-600 group-hover:text-amber-500" />
+                          <Plus size={14} className="text-slate-600 group-hover:text-amber-500" />
                         </div>
                       </button>
                     ))}
@@ -585,20 +581,20 @@ export default function ForecastingPage() {
                 </div>
 
                 {/* Right: Configuration */}
-                <div className="col-span-8 flex flex-col">
-                  <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-6">Pipeline Configuration</h3>
+                <div className="lg:col-span-8 flex flex-col">
+                  <h3 className="text-xs sm:text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4 lg:mb-6">Pipeline Configuration</h3>
                   
                   {/* Validation Strategy */}
-                  <div className="bg-white/5 border border-white/10 rounded-xl p-5 mb-6">
-                    <h4 className="font-semibold text-white mb-4 flex items-center gap-2">
-                      <Settings size={16} className="text-amber-500" /> Validation Strategy
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-3 sm:p-5 mb-4 lg:mb-6">
+                    <h4 className="font-semibold text-sm sm:text-base text-white mb-3 sm:mb-4 flex items-center gap-2">
+                      <Settings size={14} className="text-amber-500" /> Validation Strategy
                     </h4>
                     
-                    <div className="grid grid-cols-2 gap-8">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8">
                       {/* Training Ranges */}
                       <div>
                         <div className="flex items-center justify-between mb-3">
-                          <label className="text-sm text-slate-400">Training Periods</label>
+                          <label className="text-xs sm:text-sm text-slate-400">Training Periods</label>
                           <button 
                             onClick={() => setTrainingRanges([...trainingRanges, { start: '', end: '' }])}
                             className="text-xs text-amber-500 hover:text-amber-400 flex items-center gap-1"
@@ -1379,14 +1375,14 @@ export default function ForecastingPage() {
                     )}
                   </div>
 
-                  <div className="mt-6 pt-6 border-t border-white/10 flex justify-between items-center">
-                    <button onClick={() => setStep(1)} className="text-slate-400 hover:text-white transition-colors">Back</button>
+                  <div className="mt-4 lg:mt-6 pt-4 lg:pt-6 border-t border-white/10 flex justify-between items-center">
+                    <button onClick={() => setStep(1)} className="text-slate-400 hover:text-white transition-colors text-sm sm:text-base">Back</button>
                     <button 
                       onClick={startTraining}
                       disabled={selectedModels.length === 0}
-                      className="flex items-center gap-2 px-8 py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-black font-bold rounded-lg shadow-[0_0_20px_rgba(245,158,11,0.3)] transition-all"
+                      className="flex items-center gap-2 px-4 py-2 sm:px-8 sm:py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-black font-bold rounded-lg shadow-[0_0_20px_rgba(245,158,11,0.3)] transition-all text-sm sm:text-base"
                     >
-                      <Play size={18} fill="currentColor" /> Start Training
+                      <Play size={16} fill="currentColor" /> Start Training
                     </button>
                   </div>
                 </div>
@@ -1397,19 +1393,19 @@ export default function ForecastingPage() {
             {step === 3 && (
               <div className="h-full animate-in fade-in slide-in-from-bottom-4 duration-500">
                 {isTraining ? (
-                  <div className="h-full flex flex-col items-center justify-center text-center">
-                    <div className="relative w-24 h-24 mb-8">
+                  <div className="h-full flex flex-col items-center justify-center text-center px-4">
+                    <div className="relative w-16 h-16 sm:w-24 sm:h-24 mb-6 sm:mb-8">
                       <div className="absolute inset-0 border-4 border-white/10 rounded-full"></div>
                       <div className="absolute inset-0 border-4 border-t-amber-500 rounded-full animate-spin"></div>
-                      <Activity className="absolute inset-0 m-auto text-amber-500 w-8 h-8 animate-pulse" />
+                      <Activity className="absolute inset-0 m-auto text-amber-500 w-6 h-6 sm:w-8 sm:h-8 animate-pulse" />
                     </div>
-                    <h2 className="text-2xl font-bold text-white mb-2">Training Models</h2>
-                    <p className="text-slate-400 max-w-md">
+                    <h2 className="text-xl sm:text-2xl font-bold text-white mb-2">Training Models</h2>
+                    <p className="text-slate-400 text-sm sm:text-base max-w-md">
                       Optimizing hyperparameters and generating forecasts. This might take a moment depending on your dataset size.
                     </p>
                   </div>
                 ) : (
-                  <div className="h-full flex flex-col gap-6">
+                  <div className="h-full flex flex-col gap-4 sm:gap-6">
                     {/* Best Model Card */}
                     {results.length > 0 && (() => {
                       // Find the model with minimum RMSE
@@ -1418,24 +1414,24 @@ export default function ForecastingPage() {
                       , results[0]);
                       
                       return (
-                        <div className="bg-gradient-to-r from-amber-500/20 to-orange-600/20 border border-amber-500/30 rounded-xl p-6 flex items-center justify-between">
-                          <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 bg-amber-500 rounded-lg flex items-center justify-center text-black shadow-lg shadow-amber-500/20">
-                              <Trophy size={24} fill="currentColor" />
+                        <div className="bg-gradient-to-r from-amber-500/20 to-orange-600/20 border border-amber-500/30 rounded-xl p-4 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                          <div className="flex items-center gap-3 sm:gap-4">
+                            <div className="w-10 h-10 sm:w-12 sm:h-12 bg-amber-500 rounded-lg flex items-center justify-center text-black shadow-lg shadow-amber-500/20">
+                              <Trophy size={20} fill="currentColor" />
                             </div>
                             <div>
-                              <p className="text-amber-500 text-xs font-bold uppercase tracking-wider">Best Performing Model</p>
-                              <h3 className="text-2xl font-bold text-white">{bestModel.model_name}</h3>
+                              <p className="text-amber-500 text-[10px] sm:text-xs font-bold uppercase tracking-wider">Best Performing Model</p>
+                              <h3 className="text-lg sm:text-2xl font-bold text-white">{bestModel.model_name}</h3>
                             </div>
                           </div>
-                          <div className="flex gap-8 text-right">
+                          <div className="flex gap-6 sm:gap-8 sm:text-right">
                             <div>
-                              <p className="text-slate-400 text-xs uppercase">RMSE</p>
-                              <p className="text-xl font-mono font-bold text-white">{bestModel.metrics.rmse.toFixed(2)}</p>
+                              <p className="text-slate-400 text-[10px] sm:text-xs uppercase">RMSE</p>
+                              <p className="text-lg sm:text-xl font-mono font-bold text-white">{bestModel.metrics.rmse.toFixed(2)}</p>
                             </div>
                             <div>
-                              <p className="text-slate-400 text-xs uppercase">R² Score</p>
-                              <p className="text-xl font-mono font-bold text-emerald-400">{(bestModel.metrics.r2 * 100).toFixed(1)}%</p>
+                              <p className="text-slate-400 text-[10px] sm:text-xs uppercase">R² Score</p>
+                              <p className="text-lg sm:text-xl font-mono font-bold text-emerald-400">{(bestModel.metrics.r2 * 100).toFixed(1)}%</p>
                             </div>
                           </div>
                         </div>
@@ -1444,8 +1440,8 @@ export default function ForecastingPage() {
 
                     {/* Prediction Visualization */}
                     {results.length > 0 && data && (
-                      <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                        <h3 className="font-semibold text-white mb-4">Forecast Visualization (Test Set)</h3>
+                      <div className="bg-white/5 border border-white/10 rounded-xl p-3 sm:p-4">
+                        <h3 className="font-semibold text-sm sm:text-base text-white mb-3 sm:mb-4">Forecast Visualization</h3>
                         <TimeSeriesChart 
                           data={results[0].forecast} 
                           dateColumn={data.dateColumn} 
@@ -1459,47 +1455,86 @@ export default function ForecastingPage() {
                       </div>
                     )}
 
-                    {/* Metrics Table */}
-                    <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
-                      <div className="p-4 border-b border-white/10 flex justify-between items-center">
-                        <h3 className="font-semibold text-white">Model Leaderboard</h3>
+                    {/* Metrics Table - Desktop */}
+                    <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden hidden sm:block">
+                      <div className="p-3 sm:p-4 border-b border-white/10 flex justify-between items-center">
+                        <h3 className="font-semibold text-sm sm:text-base text-white">Model Leaderboard</h3>
                         <button className="text-xs flex items-center gap-2 text-slate-400 hover:text-white transition">
                           <Download size={14} /> Export CSV
                         </button>
                       </div>
-                      <table className="w-full text-sm text-left text-slate-400">
-                        <thead className="text-xs text-slate-200 uppercase bg-white/5">
-                          <tr>
-                            <th className="px-6 py-3">Model Name</th>
-                            <th className="px-6 py-3">RMSE</th>
-                            <th className="px-6 py-3">MAE</th>
-                            <th className="px-6 py-3">MAPE</th>
-                            <th className="px-6 py-3">Time (s)</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(() => {
-                            const bestRmse = Math.min(...results.map(r => r.metrics.rmse));
-                            return results.map((res) => {
-                              const isBest = res.metrics.rmse === bestRmse;
-                              return (
-                                <tr key={res.model_id} className={`border-b border-white/5 hover:bg-white/5 ${isBest ? 'bg-amber-500/5' : ''}`}>
-                                  <td className="px-6 py-4 font-medium text-white flex items-center gap-2">
-                                    {isBest && <Trophy size={14} className="text-amber-500" />}
-                                    {res.model_name}
-                                  </td>
-                                  <td className="px-6 py-4 font-mono">{res.metrics.rmse.toFixed(2)}</td>
-                                  <td className="px-6 py-4 font-mono">{res.metrics.mae.toFixed(2)}</td>
-                                  <td className="px-6 py-4 font-mono">{(res.metrics.mape * 100).toFixed(1)}%</td>
-                                  <td className="px-6 py-4 font-mono flex items-center gap-1">
-                                    <Timer size={12} /> {res.metrics.execution_time.toFixed(1)}s
-                                  </td>
-                                </tr>
-                              );
-                            });
-                          })()}
-                        </tbody>
-                      </table>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left text-slate-400">
+                          <thead className="text-xs text-slate-200 uppercase bg-white/5">
+                            <tr>
+                              <th className="px-4 sm:px-6 py-3">Model</th>
+                              <th className="px-4 sm:px-6 py-3">RMSE</th>
+                              <th className="px-4 sm:px-6 py-3">MAE</th>
+                              <th className="px-4 sm:px-6 py-3">MAPE</th>
+                              <th className="px-4 sm:px-6 py-3">Time</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(() => {
+                              const bestRmse = Math.min(...results.map(r => r.metrics.rmse));
+                              return results.map((res) => {
+                                const isBest = res.metrics.rmse === bestRmse;
+                                return (
+                                  <tr key={res.model_id} className={`border-b border-white/5 hover:bg-white/5 ${isBest ? 'bg-amber-500/5' : ''}`}>
+                                    <td className="px-4 sm:px-6 py-3 font-medium text-white flex items-center gap-2">
+                                      {isBest && <Trophy size={12} className="text-amber-500" />}
+                                      <span className="truncate max-w-[100px] sm:max-w-none">{res.model_name}</span>
+                                    </td>
+                                    <td className="px-4 sm:px-6 py-3 font-mono text-xs sm:text-sm">{res.metrics.rmse.toFixed(2)}</td>
+                                    <td className="px-4 sm:px-6 py-3 font-mono text-xs sm:text-sm">{res.metrics.mae.toFixed(2)}</td>
+                                    <td className="px-4 sm:px-6 py-3 font-mono text-xs sm:text-sm">{(res.metrics.mape * 100).toFixed(1)}%</td>
+                                    <td className="px-4 sm:px-6 py-3 font-mono text-xs sm:text-sm flex items-center gap-1">
+                                      <Timer size={12} /> {res.metrics.execution_time.toFixed(1)}s
+                                    </td>
+                                  </tr>
+                                );
+                              });
+                            })()}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Metrics Cards - Mobile */}
+                    <div className="sm:hidden space-y-3">
+                      <h3 className="font-semibold text-sm text-white">Model Leaderboard</h3>
+                      {(() => {
+                        const bestRmse = Math.min(...results.map(r => r.metrics.rmse));
+                        return results.map((res) => {
+                          const isBest = res.metrics.rmse === bestRmse;
+                          return (
+                            <div key={res.model_id} className={`bg-white/5 border rounded-lg p-3 ${isBest ? 'border-amber-500/30 bg-amber-500/5' : 'border-white/10'}`}>
+                              <div className="flex items-center gap-2 mb-2">
+                                {isBest && <Trophy size={14} className="text-amber-500" />}
+                                <span className="font-medium text-white text-sm">{res.model_name}</span>
+                              </div>
+                              <div className="grid grid-cols-4 gap-2 text-xs">
+                                <div>
+                                  <p className="text-slate-500">RMSE</p>
+                                  <p className="font-mono text-white">{res.metrics.rmse.toFixed(1)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-slate-500">MAE</p>
+                                  <p className="font-mono text-white">{res.metrics.mae.toFixed(1)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-slate-500">MAPE</p>
+                                  <p className="font-mono text-white">{(res.metrics.mape * 100).toFixed(0)}%</p>
+                                </div>
+                                <div>
+                                  <p className="text-slate-500">Time</p>
+                                  <p className="font-mono text-white">{res.metrics.execution_time.toFixed(1)}s</p>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()}
                     </div>
 
                     {/* Feature Importance Section */}
