@@ -68,6 +68,7 @@ class ModelResult(BaseModel):
     metrics: ModelMetrics
     forecast: List[Dict[str, Any]]
     feature_importance: Optional[List[FeatureImportance]] = None
+    error: Optional[str] = None  # Error message if model training failed
 
 class TrainingResponse(BaseModel):
     status: str
@@ -1277,13 +1278,15 @@ async def train_models(request: TrainingRequest):
                 ))
                 
             except Exception as e:
-                print(f"Error training {model_config.name}: {e}")
-                # Return empty result for failed model
+                error_msg = str(e)
+                print(f"Error training {model_config.name}: {error_msg}")
+                # Return result with error message
                 results.append(ModelResult(
                     model_id=model_config.id,
                     model_name=model_config.name,
                     metrics=ModelMetrics(rmse=0, mae=0, mape=0, r2=0, execution_time=0),
-                    forecast=[]
+                    forecast=[],
+                    error=error_msg
                 ))
         
         return TrainingResponse(

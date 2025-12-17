@@ -1447,7 +1447,7 @@ export default function ForecastingPage() {
                           data={results[0].forecast} 
                           dateColumn={data.dateColumn} 
                           targetColumn={data.targetColumn}
-                          predictions={results.map(r => ({
+                          predictions={results.filter(r => !r.error).map(r => ({
                             name: r.model_name,
                             data: r.forecast
                           }))}
@@ -1480,6 +1480,19 @@ export default function ForecastingPage() {
                               const bestRmse = Math.min(...results.map(r => r.metrics.rmse));
                               return results.map((res) => {
                                 const isBest = res.metrics.rmse === bestRmse;
+                                
+                                // Show error row if model failed
+                                if (res.error) {
+                                  return (
+                                    <tr key={res.model_id} className="border-b border-white/5 bg-red-500/5">
+                                      <td className="px-4 sm:px-6 py-3 font-medium text-red-400">{res.model_name}</td>
+                                      <td colSpan={4} className="px-4 sm:px-6 py-3 text-xs sm:text-sm text-red-300">
+                                        ❌ {res.error}
+                                      </td>
+                                    </tr>
+                                  );
+                                }
+                                
                                 return (
                                   <tr key={res.model_id} className={`border-b border-white/5 hover:bg-white/5 ${isBest ? 'bg-amber-500/5' : ''}`}>
                                     <td className="px-4 sm:px-6 py-3 font-medium text-white flex items-center gap-2">
@@ -1508,6 +1521,19 @@ export default function ForecastingPage() {
                         const bestRmse = Math.min(...results.map(r => r.metrics.rmse));
                         return results.map((res) => {
                           const isBest = res.metrics.rmse === bestRmse;
+                          
+                          // Show error if model failed
+                          if (res.error) {
+                            return (
+                              <div key={res.model_id} className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <span className="font-medium text-red-400 text-sm">{res.model_name}</span>
+                                </div>
+                                <p className="text-xs text-red-300">❌ {res.error}</p>
+                              </div>
+                            );
+                          }
+                          
                           return (
                             <div key={res.model_id} className={`bg-white/5 border rounded-lg p-3 ${isBest ? 'border-amber-500/30 bg-amber-500/5' : 'border-white/10'}`}>
                               <div className="flex items-center gap-2 mb-2">

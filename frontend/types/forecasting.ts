@@ -147,6 +147,7 @@ export interface ModelResult {
   metrics: ModelMetrics;
   forecast: ForecastPoint[];
   feature_importance?: FeatureImportance[];
+  error?: string;  // Error message if model training failed
 }
 
 export interface TrainingResponse {
