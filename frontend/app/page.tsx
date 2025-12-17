@@ -20,10 +20,28 @@ export default function ForecastingPage() {
   const [fullData, setFullData] = useState<any[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Dataset Stats State
+  const [datasetStats, setDatasetStats] = useState<{
+    date_min: string;
+    date_max: string;
+    total_rows: number;
+    frequency: string;
+    frequency_label: string;
+    missing_dates: number;
+    missing_values_target: number;
+    value_min: number;
+    value_max: number;
+    value_mean: number;
+  } | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // Results State
   const [isTraining, setIsTraining] = useState(false);
   const [results, setResults] = useState<ModelResult[]>([]);
+
+  // Raw data from CSV (before backend normalization)
+  const [rawData, setRawData] = useState<any[]>([]);
 
   const handleFile = (file: File) => {
     Papa.parse(file, {
@@ -38,24 +56,9 @@ export default function ForecastingPage() {
         const dateCol = columns.find(c => c.toLowerCase().includes('date') || c.toLowerCase().includes('time')) || columns[0];
         const targetCol = columns.find(c => c !== dateCol && (typeof firstRow[c] === 'number')) || columns[1];
 
-        // Sort data by date
-        const sortedData = (results.data as any[]).sort((a: any, b: any) => {
-          const dateA = new Date(a[dateCol]).getTime();
-          const dateB = new Date(b[dateCol]).getTime();
-          return dateA - dateB;
-        });
-
-        if (sortedData.length > 0) {
-          const minDate = sortedData[0][dateCol];
-          const maxDate = sortedData[sortedData.length - 1][dateCol];
-          
-          // Default split: Last 20% for prediction
-          const splitIndex = Math.floor(sortedData.length * 0.8);
-          const splitDate = sortedData[splitIndex][dateCol];
-
-          setTrainingRanges([{ start: minDate, end: splitDate }]);
-          setPredictionRanges([{ start: splitDate, end: maxDate }]);
-        }
+        // Store raw data for backend processing
+        const filteredData = (results.data as any[]).filter((row: any) => row[dateCol]);
+        setRawData(filteredData);
 
         setData({
           filename: file.name,
@@ -65,8 +68,7 @@ export default function ForecastingPage() {
           frequency: 'D',
           exogenousFeatures: columns.filter(c => c !== dateCol && c !== targetCol)
         });
-        setPreviewData(sortedData.slice(0, 5));
-        setFullData(sortedData);
+        setPreviewData(filteredData.slice(0, 5));
       },
       error: (error) => {
         console.error('Error parsing CSV:', error);
@@ -136,6 +138,63 @@ export default function ForecastingPage() {
       handleFile(e.dataTransfer.files[0]);
     }
   };
+
+  // Analyze dataset when data or column selection changes
+  // Backend parses dates, returns normalized data with ISO format
+  const analyzeDataset = async () => {
+    if (!data || !rawData.length) return;
+    
+    setIsAnalyzing(true);
+    try {
+      const response = await fetch('http://localhost:8000/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: rawData,
+          date_column: data.dateColumn,
+          target_column: data.targetColumn,
+        }),
+      });
+      
+      const result = await response.json();
+      if (result.status === 'success' && result.stats) {
+        setDatasetStats(result.stats);
+        // Update data frequency with detected one
+        setData(prev => prev ? { ...prev, frequency: result.stats.frequency } : null);
+        
+        // Use normalized data from backend (dates in ISO format, values cleaned)
+        if (result.normalized_data && result.normalized_data.length > 0) {
+          // Convert to format expected by chart: [{date: 'YYYY-MM-DD', value: number}]
+          const normalizedData = result.normalized_data.map((point: { date: string; value: number }) => ({
+            [data.dateColumn]: point.date.split('T')[0], // Keep just YYYY-MM-DD
+            [data.targetColumn]: point.value
+          }));
+          setFullData(normalizedData);
+          
+          // Set default training/prediction ranges from stats
+          const dateMin = result.stats.date_min.split('T')[0];
+          const dateMax = result.stats.date_max.split('T')[0];
+          const totalRows = normalizedData.length;
+          const splitIndex = Math.floor(totalRows * 0.8);
+          const splitDate = normalizedData[splitIndex]?.[data.dateColumn] || dateMax;
+          
+          setTrainingRanges([{ start: dateMin, end: splitDate }]);
+          setPredictionRanges([{ start: splitDate, end: dateMax }]);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to analyze dataset:', error);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  // Trigger analysis when data or columns change
+  useEffect(() => {
+    if (data && rawData.length > 0) {
+      analyzeDataset();
+    }
+  }, [data?.dateColumn, data?.targetColumn, rawData.length]);
 
   const addModel = (type: ModelType) => {
     // Count existing models of this type to auto-number
@@ -305,7 +364,7 @@ export default function ForecastingPage() {
                       targetColumn={data.targetColumn} 
                     />
 
-                    <div className="grid grid-cols-3 gap-6">
+                    <div className="grid grid-cols-2 gap-6">
                       <div className="space-y-2">
                         <label className="text-sm text-slate-400">Date Column</label>
                         <select 
@@ -326,19 +385,53 @@ export default function ForecastingPage() {
                           {data.columns.map(col => <option key={col} value={col}>{col}</option>)}
                         </select>
                       </div>
-                      <div className="space-y-2">
-                        <label className="text-sm text-slate-400">Frequency</label>
-                        <select 
-                          value={data.frequency}
-                          onChange={(e) => setData({...data, frequency: e.target.value as any})}
-                          className="w-full bg-black/20 border border-white/10 rounded-lg p-3 text-white focus:border-amber-500 outline-none [&>option]:bg-slate-900 [&>option]:text-white"
-                        >
-                          <option value="D">Daily</option>
-                          <option value="W">Weekly</option>
-                          <option value="M">Monthly</option>
-                          <option value="H">Hourly</option>
-                        </select>
-                      </div>
+                    </div>
+
+                    {/* Dataset Stats Panel */}
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                      <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                        <BarChart3 size={16} className="text-amber-500" />
+                        Dataset Analysis
+                        {isAnalyzing && <span className="text-xs text-slate-400 animate-pulse ml-2">Analyzing...</span>}
+                      </h4>
+                      {datasetStats ? (
+                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                          <div className="bg-black/20 rounded-lg p-3">
+                            <p className="text-[10px] text-slate-500 uppercase">Frequency</p>
+                            <p className="text-sm font-mono text-amber-400">{datasetStats.frequency_label}</p>
+                          </div>
+                          <div className="bg-black/20 rounded-lg p-3">
+                            <p className="text-[10px] text-slate-500 uppercase">Date Range</p>
+                            <p className="text-xs font-mono text-white">
+                              {new Date(datasetStats.date_min).toLocaleDateString()} - {new Date(datasetStats.date_max).toLocaleDateString()}
+                            </p>
+                          </div>
+                          <div className="bg-black/20 rounded-lg p-3">
+                            <p className="text-[10px] text-slate-500 uppercase">Total Rows</p>
+                            <p className="text-sm font-mono text-white">{datasetStats.total_rows.toLocaleString()}</p>
+                          </div>
+                          <div className="bg-black/20 rounded-lg p-3">
+                            <p className="text-[10px] text-slate-500 uppercase">Missing Dates</p>
+                            <p className={`text-sm font-mono ${datasetStats.missing_dates > 0 ? 'text-orange-400' : 'text-emerald-400'}`}>
+                              {datasetStats.missing_dates}
+                            </p>
+                          </div>
+                          <div className="bg-black/20 rounded-lg p-3">
+                            <p className="text-[10px] text-slate-500 uppercase">Missing Values</p>
+                            <p className={`text-sm font-mono ${datasetStats.missing_values_target > 0 ? 'text-orange-400' : 'text-emerald-400'}`}>
+                              {datasetStats.missing_values_target}
+                            </p>
+                          </div>
+                          <div className="bg-black/20 rounded-lg p-3">
+                            <p className="text-[10px] text-slate-500 uppercase">Target Range</p>
+                            <p className="text-xs font-mono text-white">
+                              {datasetStats.value_min.toFixed(1)} - {datasetStats.value_max.toFixed(1)}
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-slate-500 text-sm">Select date and target columns to analyze</p>
+                      )}
                     </div>
 
                     <div className="flex-1 overflow-hidden border border-white/10 rounded-xl">

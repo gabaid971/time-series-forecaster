@@ -22,8 +22,16 @@ interface TimeSeriesChartProps {
 }
 
 export default function TimeSeriesChart({ data, dateColumn, targetColumn, title, predictions }: TimeSeriesChartProps) {
-  // Prepare data for Plotly
-  const xValues = data.map(row => row[dateColumn]);
+  // Data is already normalized with ISO format dates from backend
+  // Just extract the date strings directly
+  const xValues = data.map(row => {
+    const dateVal = row[dateColumn];
+    // Handle both string and Date objects, extract YYYY-MM-DD
+    if (!dateVal) return '';
+    if (typeof dateVal === 'string') return dateVal.split('T')[0];
+    if (dateVal instanceof Date) return dateVal.toISOString().split('T')[0];
+    return String(dateVal);
+  });
   const yValues = data.map(row => row[targetColumn]);
 
   const plotData: Data[] = [
@@ -40,7 +48,13 @@ export default function TimeSeriesChart({ data, dateColumn, targetColumn, title,
 
   if (predictions && predictions.length > 0) {
     predictions.forEach((pred, idx) => {
-      const predX = pred.data.map(row => row[dateColumn]);
+      // Predictions also have ISO format dates from backend
+      const predX = pred.data.map(row => {
+        const dateVal = row[dateColumn];
+        if (!dateVal) return '';
+        if (typeof dateVal === 'string') return dateVal.split('T')[0];
+        return String(dateVal);
+      });
       const predY = pred.data.map(row => row['prediction'] !== undefined ? row['prediction'] : row[targetColumn]);
       
       // Generate a color if not provided
