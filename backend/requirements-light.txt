@@ -1,0 +1,9 @@
+# Light requirements (without Prophet)
+fastapi
+uvicorn[standard]
+polars
+numpy
+scikit-learn
+pyarrow
+xgboost
+statsmodels

@@ -12,11 +12,18 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 import xgboost as xgb
 from statsmodels.tsa.arima.model import ARIMA
-from prophet import Prophet
 import time
 from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')  # Suppress Prophet/statsmodels warnings
+
+# Optional Prophet import (heavy dependency)
+try:
+    from prophet import Prophet
+    PROPHET_AVAILABLE = True
+except ImportError:
+    PROPHET_AVAILABLE = False
+    print("⚠️ Prophet not installed. Prophet model will be unavailable.")
 
 # ============================================================================
 # SCHEMAS (Pydantic models for API request/response)
@@ -1241,6 +1248,8 @@ async def train_models(request: TrainingRequest):
                         params=model_config.params
                     )
                 elif model_config.type == "PROPHET":
+                    if not PROPHET_AVAILABLE:
+                        raise ValueError("Prophet is not installed on this server. Please use Linear Regression, XGBoost, or ARIMA instead.")
                     result = train_prophet(
                         df=df,
                         date_col=date_col,

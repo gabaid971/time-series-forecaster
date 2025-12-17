@@ -1,9 +1,13 @@
+# Core dependencies
 fastapi
-uvicorn
+uvicorn[standard]
 polars
 numpy
 scikit-learn
 pyarrow
 xgboost
 statsmodels
-prophet
+
+# Optional: Prophet (heavy, ~1GB with dependencies)
+# Uncomment to enable Prophet model:
+# prophet

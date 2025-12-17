@@ -1,0 +1,14 @@
+# Render.com configuration
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: time-series-forecaster-api
+    env: docker
+    dockerfilePath: ./Dockerfile
+    region: frankfurt  # ou oregon, singapore, ohio
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_ENV
+        value: production

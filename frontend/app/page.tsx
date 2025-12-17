@@ -6,6 +6,9 @@ import { Upload, Activity, BarChart3, Settings, Play, Plus, X, ChevronRight, Fil
 import Papa from 'papaparse';
 import TimeSeriesChart from '../components/TimeSeriesChart';
 
+// API URL - uses environment variable in production, localhost in development
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 export default function ForecastingPage() {
   const [step, setStep] = useState<number>(1);
   const [selectedModels, setSelectedModels] = useState<ModelConfig[]>([]);
@@ -98,7 +101,7 @@ export default function ForecastingPage() {
         models: selectedModels
       };
 
-      const response = await fetch('http://localhost:8000/train', {
+      const response = await fetch(`${API_URL}/train`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -150,7 +153,7 @@ export default function ForecastingPage() {
     
     setIsAnalyzing(true);
     try {
-      const response = await fetch('http://localhost:8000/analyze', {
+      const response = await fetch(`${API_URL}/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
