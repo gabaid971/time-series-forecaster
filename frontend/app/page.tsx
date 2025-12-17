@@ -9,6 +9,11 @@ import TimeSeriesChart from '../components/TimeSeriesChart';
 // API URL - uses environment variable in production, localhost in development
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+// Debug: log API URL (check browser console)
+if (typeof window !== 'undefined') {
+  console.log('🔗 API_URL:', API_URL);
+}
+
 export default function ForecastingPage() {
   const [step, setStep] = useState<number>(1);
   const [selectedModels, setSelectedModels] = useState<ModelConfig[]>([]);
@@ -147,6 +152,50 @@ export default function ForecastingPage() {
   };
 
   // Analyze dataset when data or column selection changes
+  // Fallback: use local data if backend fails
+  const useLocalFallback = () => {
+    if (!data || !rawData.length) return;
+    
+    // Use raw CSV data directly for visualization
+    const localData = rawData.map(row => ({
+      [data.dateColumn]: row[data.dateColumn],
+      [data.targetColumn]: row[data.targetColumn]
+    }));
+    setFullData(localData);
+    
+    // Calculate basic stats locally
+    const values = rawData.map(r => r[data.targetColumn]).filter((v: unknown) => typeof v === 'number');
+    const dates = rawData.map(r => String(r[data.dateColumn])).filter(Boolean);
+    
+    // Try to find min/max dates (works for various formats)
+    const sortedDates = [...dates].sort();
+    const dateMin = sortedDates[0] || '';
+    const dateMax = sortedDates[sortedDates.length - 1] || '';
+    
+    // Set training/prediction ranges
+    const splitIndex = Math.floor(localData.length * 0.8);
+    const splitDate = sortedDates[splitIndex] || dateMax;
+    
+    setTrainingRanges([{ start: dateMin, end: splitDate }]);
+    setPredictionRanges([{ start: splitDate, end: dateMax }]);
+    
+    // Set basic stats
+    if (values.length > 0) {
+      setDatasetStats({
+        date_min: dateMin,
+        date_max: dateMax,
+        total_rows: rawData.length,
+        frequency: 'D',
+        frequency_label: 'Daily (assumed)',
+        missing_dates: 0,
+        missing_values_target: rawData.length - values.length,
+        value_min: Math.min(...values),
+        value_max: Math.max(...values),
+        value_mean: values.reduce((a: number, b: number) => a + b, 0) / values.length
+      });
+    }
+  };
+
   // Backend parses dates, returns normalized data with ISO format
   const analyzeDataset = async () => {
     if (!data || !rawData.length) return;
@@ -193,9 +242,16 @@ export default function ForecastingPage() {
           setTrainingRanges([{ start: dateMin, end: splitDate }]);
           setPredictionRanges([{ start: splitDate, end: dateMax }]);
         }
+      } else {
+        // Backend returned error, use fallback
+        console.warn('Backend analysis failed, using local fallback');
+        useLocalFallback();
       }
     } catch (error) {
       console.error('Failed to analyze dataset:', error);
+      // Use local fallback when backend is unreachable
+      console.warn('Backend unreachable, using local fallback for visualization');
+      useLocalFallback();
     } finally {
       setIsAnalyzing(false);
     }
