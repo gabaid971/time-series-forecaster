@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { ModelConfig, ModelType, TimeSeriesData, ModelResult, DateRange, LinearRegressionParams, ColumnInfo, FeatureConfig, TemporalFeatureConfig, ExogenousFeatureConfig } from '../types/forecasting';
-import { Upload, Activity, BarChart3, Settings, Play, Plus, X, ChevronRight, FileText, CheckCircle2, Trophy, Timer, Download, Trash2 } from 'lucide-react';
+import { Upload, Activity, BarChart3, Settings, Play, Plus, X, ChevronRight, FileText, CheckCircle2, Trophy, Timer, Download, Trash2, LineChart, Network, Target } from 'lucide-react';
 import Papa from 'papaparse';
 import TimeSeriesChart from '../components/TimeSeriesChart';
 
@@ -554,11 +554,10 @@ export default function ForecastingPage() {
                   
                   <div className="grid grid-cols-2 lg:grid-cols-1 gap-2 lg:space-y-3">
                     {[
-                      { id: 'LINEAR_REGRESSION', name: 'Linear Regression', desc: 'Simple Baseline', icon: '📏' },
-                      { id: 'ARIMA', name: 'ARIMA', desc: 'Statistical Baseline', icon: '📊' },
-                      { id: 'PROPHET', name: 'Prophet', desc: 'Facebook / Meta', icon: '📈' },
-                      { id: 'XGBOOST', name: 'XGBoost', desc: 'Gradient Boosting', icon: '🚀' },
-                      { id: 'NBEATS', name: 'N-BEATS', desc: 'Deep Learning SOTA', icon: '🧠' },
+                      { id: 'LINEAR_REGRESSION', name: 'Linear Regression', desc: 'Simple Baseline', Icon: LineChart },
+                      { id: 'ARIMA', name: 'ARIMA', desc: 'Statistical Baseline', Icon: Activity },
+                      { id: 'PROPHET', name: 'Prophet', desc: 'Facebook model', Icon: Target },
+                      { id: 'XGBOOST', name: 'XGBoost', desc: 'Gradient Boosting', Icon: Network },
                     ].map((m) => (
                       <button 
                         key={m.id}
@@ -567,7 +566,9 @@ export default function ForecastingPage() {
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2 lg:gap-3">
-                            <span className="text-lg lg:text-xl grayscale group-hover:grayscale-0 transition-all">{m.icon}</span>
+                            <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center group-hover:bg-amber-500/10 transition-all">
+                              <m.Icon size={18} className="text-slate-400 group-hover:text-amber-500 transition-colors" />
+                            </div>
                             <div>
                               <div className="font-medium text-xs lg:text-base text-slate-200 group-hover:text-white">{m.name}</div>
                               <div className="text-[10px] lg:text-xs text-slate-500 hidden sm:block">{m.desc}</div>
