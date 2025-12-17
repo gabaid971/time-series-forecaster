@@ -218,17 +218,20 @@ export default function ForecastingPage() {
       'NBEATS': 'N-BEATS'
     };
     
+    // Default params per model type
+    const defaultParams: Record<ModelType, any> = {
+      'LINEAR_REGRESSION': { lags: [1, 7] },
+      'XGBOOST': { lags: [1, 7, 14, 30], n_estimators: 100, max_depth: 6, learning_rate: 0.1 },
+      'ARIMA': { p: 1, d: 1, q: 1 },
+      'PROPHET': { daily_seasonality: false, weekly_seasonality: true, yearly_seasonality: true, seasonality_mode: 'additive' },
+      'NBEATS': {}
+    };
+    
     const newModel: ModelConfig = {
       id: `${type}-${Date.now()}`,
       type: type,
       name: `${typeNames[type]} ${modelNumber}`,
-      params: type === 'LINEAR_REGRESSION'
-        ? { lags: [1, 7] }
-        : type === 'XGBOOST' 
-        ? { lags: [1, 7], rolling_features: [], use_exogenous: true } 
-        : type === 'ARIMA'
-        ? { p: 1, d: 1, q: 1 } 
-        : { daily_seasonality: true, weekly_seasonality: true, yearly_seasonality: true }
+      params: defaultParams[type]
     };
     setSelectedModels([...selectedModels, newModel]);
   };
@@ -669,7 +672,7 @@ export default function ForecastingPage() {
                             {model.type === 'LINEAR_REGRESSION' && (
                               <>
                                 <div className="col-span-2">
-                                  <label className="text-xs text-slate-400 mb-2 block">Lag Features</label>
+                                  <label className="text-xs text-slate-400 mb-2 block">Target Lags</label>
                                   <input 
                                     type="text" 
                                     defaultValue={'lags' in model.params ? model.params.lags.join(', ') : '1, 7'}
@@ -914,46 +917,402 @@ export default function ForecastingPage() {
                               </>
                             )}
 
-                            {model.type === 'XGBOOST' && (
+                            {model.type === 'XGBOOST' && (() => {
+                              const params = model.params as any;
+                              const getBaseConfig = () => params.feature_config || {
+                                target_lags: params.lags || [1, 7, 14, 30],
+                                temporal: { month: false, day_of_week: false, day_of_month: false, week_of_year: false, year: false },
+                                exogenous: []
+                              };
+                              return (
                               <>
+                                {/* Target Lags */}
                                 <div className="col-span-2">
-                                  <label className="text-xs text-slate-400 mb-2 block">Lag Features</label>
+                                  <label className="text-xs text-slate-400 mb-2 block">Target Lags</label>
                                   <input 
                                     type="text" 
-                                    defaultValue={'lags' in model.params ? model.params.lags.join(', ') : '1, 7, 14, 30'}
+                                    defaultValue={params.lags?.join(', ') ?? '1, 7, 14, 30'}
                                     onBlur={(e) => {
                                       const lags = parseLagsString(e.target.value);
                                       if (lags.length > 0) {
-                                        updateModelParams(model.id, { lags });
+                                        updateModelParams(model.id, { lags } as any);
                                       }
                                     }}
                                     className="glass-input w-full p-2 rounded-lg text-sm" 
                                   />
-                                  <p className="text-[10px] text-slate-500 mt-1">Comma separated lag periods</p>
+                                  <p className="text-[10px] text-slate-500 mt-1">Comma separated lag periods (e.g., 1, 7, 14)</p>
                                 </div>
-                                <div className="flex items-center gap-3 p-3 bg-black/20 rounded-lg border border-white/5">
-                                  <input type="checkbox" defaultChecked className="accent-amber-500 w-4 h-4" />
-                                  <span className="text-sm text-slate-300">Use Exogenous Features</span>
+                                
+                                {/* Target Mode */}
+                                <div>
+                                  <label className="text-xs text-slate-400 mb-2 block">Target Mode</label>
+                                  <select
+                                    value={params.target_mode ?? 'raw'}
+                                    onChange={(e) => updateModelParams(model.id, { target_mode: e.target.value } as any)}
+                                    className="glass-input w-full p-2 rounded-lg text-sm bg-black/30"
+                                  >
+                                    <option value="raw">Raw (predict y)</option>
+                                    <option value="residual">Residual (predict y - y_lag)</option>
+                                  </select>
+                                  <p className="text-[10px] text-slate-500 mt-1">Raw = predict target directly, Residual = predict difference</p>
                                 </div>
-                              </>
-                            )}
+                                
+                                {/* Residual Lag */}
+                                <div>
+                                  <label className="text-xs text-slate-400 mb-2 block">
+                                    Residual Lag {params.target_mode === 'residual' ? '' : '(disabled)'}
+                                  </label>
+                                  <input 
+                                    type="number" 
+                                    min="1"
+                                    value={params.residual_lag ?? 1}
+                                    onChange={(e) => updateModelParams(model.id, { residual_lag: parseInt(e.target.value) || 1 } as any)}
+                                    disabled={params.target_mode !== 'residual'}
+                                    className="glass-input w-full p-2 rounded-lg text-sm disabled:opacity-40 disabled:cursor-not-allowed" 
+                                  />
+                                  <p className="text-[10px] text-slate-500 mt-1">Which lag to subtract</p>
+                                </div>
+                                
+                                {/* XGBoost Specific Params */}
+                                <div>
+                                  <label className="text-xs text-slate-400 mb-2 block">N Estimators</label>
+                                  <input 
+                                    type="number" 
+                                    defaultValue={params.n_estimators ?? 100}
+                                    min={10}
+                                    max={1000}
+                                    onBlur={(e) => updateModelParams(model.id, { n_estimators: parseInt(e.target.value) || 100 } as any)}
+                                    className="glass-input w-full p-2 rounded-lg text-sm" 
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs text-slate-400 mb-2 block">Max Depth</label>
+                                  <input 
+                                    type="number" 
+                                    defaultValue={params.max_depth ?? 6}
+                                    min={1}
+                                    max={20}
+                                    onBlur={(e) => updateModelParams(model.id, { max_depth: parseInt(e.target.value) || 6 } as any)}
+                                    className="glass-input w-full p-2 rounded-lg text-sm" 
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs text-slate-400 mb-2 block">Learning Rate</label>
+                                  <input 
+                                    type="number" 
+                                    step={0.01}
+                                    defaultValue={params.learning_rate ?? 0.1}
+                                    min={0.01}
+                                    max={1}
+                                    onBlur={(e) => updateModelParams(model.id, { learning_rate: parseFloat(e.target.value) || 0.1 } as any)}
+                                    className="glass-input w-full p-2 rounded-lg text-sm" 
+                                  />
+                                </div>
+                                
+                                {/* Temporal Features */}
+                                <div className="col-span-2">
+                                  <label className="text-xs text-slate-400 mb-2 block">Temporal Features</label>
+                                  <div className="flex flex-wrap gap-2">
+                                    {[
+                                      { key: 'month', label: 'Month (sin/cos)' },
+                                      { key: 'day_of_week', label: 'Day of Week (sin/cos)' },
+                                      { key: 'day_of_month', label: 'Day of Month' },
+                                      { key: 'week_of_year', label: 'Week of Year' },
+                                      { key: 'year', label: 'Year' },
+                                    ].map(({ key, label }) => (
+                                      <label key={key} className="flex items-center gap-2 p-2 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-amber-500/30">
+                                        <input 
+                                          type="checkbox" 
+                                          checked={params.feature_config?.temporal?.[key] ?? false}
+                                          onChange={(e) => {
+                                            const currentConfig = getBaseConfig();
+                                            updateModelParams(model.id, {
+                                              feature_config: {
+                                                ...currentConfig,
+                                                temporal: {
+                                                  ...currentConfig.temporal,
+                                                  [key]: e.target.checked
+                                                }
+                                              }
+                                            } as any);
+                                          }}
+                                          className="accent-amber-500 w-4 h-4" 
+                                        />
+                                        <span className="text-sm text-slate-300">{label}</span>
+                                      </label>
+                                    ))}
+                                  </div>
+                                  <p className="text-[10px] text-slate-500 mt-1">Extract temporal patterns from date</p>
+                                </div>
 
-                            {model.type === 'ARIMA' && (
+                                {/* Exogenous Variables */}
+                                {availableColumns.filter(c => c.dtype === 'numeric').length > 0 && (
+                                  <div className="col-span-2">
+                                    <label className="text-xs text-slate-400 mb-2 block">Exogenous Variables</label>
+                                    <div className="space-y-3">
+                                      {availableColumns.filter(c => c.dtype === 'numeric').map(col => {
+                                        const currentConfig = params.feature_config;
+                                        const exogConfig = currentConfig?.exogenous?.find((e: any) => e.column === col.name);
+                                        const isEnabled = !!exogConfig;
+                                        const selectedLags = exogConfig?.lags || [];
+                                        const availableLags = [0, 1, 2, 3, 7, 14, 30];
+                                        
+                                        const toggleLag = (lag: number) => {
+                                          const base = getBaseConfig();
+                                          const currentExog = base.exogenous.find((e: any) => e.column === col.name);
+                                          if (!currentExog) return;
+                                          
+                                          const newLags = currentExog.lags.includes(lag)
+                                            ? currentExog.lags.filter((l: number) => l !== lag)
+                                            : [...currentExog.lags, lag].sort((a: number, b: number) => a - b);
+                                          
+                                          updateModelParams(model.id, {
+                                            feature_config: {
+                                              ...base,
+                                              exogenous: base.exogenous.map((ex: any) => 
+                                                ex.column === col.name ? { ...ex, lags: newLags } : ex
+                                              )
+                                            }
+                                          } as any);
+                                        };
+                                        
+                                        return (
+                                          <div key={col.name} className={`p-3 rounded-lg border transition-all ${isEnabled ? 'bg-amber-500/5 border-amber-500/30' : 'bg-black/20 border-white/5'}`}>
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                              <input 
+                                                type="checkbox" 
+                                                checked={isEnabled}
+                                                onChange={(e) => {
+                                                  const base = getBaseConfig();
+                                                  if (e.target.checked) {
+                                                    updateModelParams(model.id, {
+                                                      feature_config: {
+                                                        ...base,
+                                                        exogenous: [...base.exogenous, {
+                                                          column: col.name,
+                                                          lags: [0, 1],
+                                                          use_actual: false
+                                                        }]
+                                                      }
+                                                    } as any);
+                                                  } else {
+                                                    updateModelParams(model.id, {
+                                                      feature_config: {
+                                                        ...base,
+                                                        exogenous: base.exogenous.filter((e: any) => e.column !== col.name)
+                                                      }
+                                                    } as any);
+                                                  }
+                                                }}
+                                                className="accent-amber-500 w-4 h-4" 
+                                              />
+                                              <span className={`text-sm font-medium ${isEnabled ? 'text-amber-400' : 'text-slate-300'}`}>{col.name}</span>
+                                              <span className="text-[10px] text-slate-500">
+                                                {col.missing_count > 0 ? `(${col.missing_count} missing)` : ''}
+                                              </span>
+                                            </label>
+                                            
+                                            {isEnabled && (
+                                              <div className="mt-3 pl-6 space-y-2">
+                                                <div>
+                                                  <span className="text-[10px] text-slate-400 block mb-1">Select lags to include:</span>
+                                                  <div className="flex flex-wrap gap-1">
+                                                    {availableLags.map(lag => (
+                                                      <button
+                                                        key={lag}
+                                                        type="button"
+                                                        onClick={() => toggleLag(lag)}
+                                                        className={`px-2 py-1 text-xs rounded transition-all ${
+                                                          selectedLags.includes(lag)
+                                                            ? 'bg-amber-500 text-black font-medium'
+                                                            : 'bg-white/5 text-slate-400 hover:bg-white/10'
+                                                        }`}
+                                                      >
+                                                        {lag === 0 ? 't' : `t-${lag}`}
+                                                      </button>
+                                                    ))}
+                                                  </div>
+                                                </div>
+                                                
+                                                <div className="flex items-center gap-2">
+                                                  <span className="text-[10px] text-slate-400">Delta (t minus lag):</span>
+                                                  <select
+                                                    value={exogConfig?.delta_lag ?? ''}
+                                                    onChange={(e) => {
+                                                      const base = getBaseConfig();
+                                                      const val = e.target.value ? parseInt(e.target.value) : undefined;
+                                                      updateModelParams(model.id, {
+                                                        feature_config: {
+                                                          ...base,
+                                                          exogenous: base.exogenous.map((ex: any) => 
+                                                            ex.column === col.name ? { ...ex, delta_lag: val } : ex
+                                                          )
+                                                        }
+                                                      } as any);
+                                                    }}
+                                                    className="glass-input px-2 py-1 rounded text-xs"
+                                                  >
+                                                    <option value="">None</option>
+                                                    {[1, 2, 3, 7, 14, 30].map(lag => (
+                                                      <option key={lag} value={lag}>t - t-{lag}</option>
+                                                    ))}
+                                                  </select>
+                                                </div>
+                                                
+                                                {selectedLags.length > 0 && (
+                                                  <div className="text-[10px] text-slate-500">
+                                                    Features: {selectedLags.map((l: number) => `${col.name}_lag_${l}`).join(', ')}
+                                                    {exogConfig?.delta_lag && `, ${col.name}_delta_${exogConfig.delta_lag}`}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                    <p className="text-[10px] text-slate-500 mt-2">t = current value, t-1 = previous period, etc.</p>
+                                  </div>
+                                )}
+                              </>
+                              );
+                            })()}
+
+                            {model.type === 'ARIMA' && (() => {
+                              const params = model.params as any;
+                              return (
                               <>
                                 <div>
                                   <label className="text-xs text-slate-400 mb-2 block">P (Auto-regressive)</label>
-                                  <input type="number" defaultValue={1} className="glass-input w-full p-2 rounded-lg text-sm" />
+                                  <input 
+                                    type="number" 
+                                    defaultValue={params.p ?? 1}
+                                    min={0}
+                                    max={10}
+                                    onBlur={(e) => updateModelParams(model.id, { p: parseInt(e.target.value) || 1 } as any)}
+                                    className="glass-input w-full p-2 rounded-lg text-sm" 
+                                  />
                                 </div>
                                 <div>
-                                  <label className="text-xs text-slate-400 mb-2 block">D (Integrated)</label>
-                                  <input type="number" defaultValue={1} className="glass-input w-full p-2 rounded-lg text-sm" />
+                                  <label className="text-xs text-slate-400 mb-2 block">D (Differencing)</label>
+                                  <input 
+                                    type="number" 
+                                    defaultValue={params.d ?? 1}
+                                    min={0}
+                                    max={3}
+                                    onBlur={(e) => updateModelParams(model.id, { d: parseInt(e.target.value) || 1 } as any)}
+                                    className="glass-input w-full p-2 rounded-lg text-sm" 
+                                  />
                                 </div>
                                 <div>
                                   <label className="text-xs text-slate-400 mb-2 block">Q (Moving Avg)</label>
-                                  <input type="number" defaultValue={1} className="glass-input w-full p-2 rounded-lg text-sm" />
+                                  <input 
+                                    type="number" 
+                                    defaultValue={params.q ?? 1}
+                                    min={0}
+                                    max={10}
+                                    onBlur={(e) => updateModelParams(model.id, { q: parseInt(e.target.value) || 1 } as any)}
+                                    className="glass-input w-full p-2 rounded-lg text-sm" 
+                                  />
+                                </div>
+                                <div className="col-span-2 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                                  <p className="text-[10px] text-blue-300">
+                                    💡 ARIMA is a univariate model - it uses only the target variable's history. 
+                                    Common values: (1,1,1) for simple series, (5,1,0) for AR-heavy, (0,1,1) for MA-heavy.
+                                  </p>
                                 </div>
                               </>
-                            )}
+                              );
+                            })()}
+
+                            {model.type === 'PROPHET' && (() => {
+                              const params = model.params as any;
+                              return (
+                              <>
+                                {/* Lag Regressors - Key for predictive performance */}
+                                <div className="col-span-2">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <label className="text-xs text-slate-400">Lag Regressors</label>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                      <input 
+                                        type="checkbox" 
+                                        checked={params.use_lag_regressors ?? true}
+                                        onChange={(e) => updateModelParams(model.id, { use_lag_regressors: e.target.checked } as any)}
+                                        className="accent-amber-500 w-4 h-4" 
+                                      />
+                                      <span className="text-xs text-slate-300">Enable</span>
+                                    </label>
+                                  </div>
+                                  <input 
+                                    type="text" 
+                                    defaultValue={params.lag_regressors?.join(', ') ?? '1, 7'}
+                                    disabled={!(params.use_lag_regressors ?? true)}
+                                    onBlur={(e) => {
+                                      const lags = e.target.value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n > 0);
+                                      if (lags.length > 0) {
+                                        updateModelParams(model.id, { lag_regressors: lags } as any);
+                                      }
+                                    }}
+                                    className="glass-input w-full p-2 rounded-lg text-sm disabled:opacity-40" 
+                                  />
+                                  <p className="text-[10px] text-slate-500 mt-1">Past values to use as regressors (e.g., 1 = yesterday, 7 = last week)</p>
+                                </div>
+                                
+                                {/* Seasonality Checkboxes */}
+                                <div className="col-span-2">
+                                  <label className="text-xs text-slate-400 mb-2 block">Seasonality Components</label>
+                                  <div className="grid grid-cols-3 gap-3">
+                                    <label className="flex items-center gap-2 p-3 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-amber-500/30">
+                                      <input 
+                                        type="checkbox" 
+                                        checked={params.daily_seasonality ?? false}
+                                        onChange={(e) => updateModelParams(model.id, { daily_seasonality: e.target.checked } as any)}
+                                        className="accent-amber-500 w-4 h-4" 
+                                      />
+                                      <span className="text-sm text-slate-300">Daily</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 p-3 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-amber-500/30">
+                                      <input 
+                                        type="checkbox" 
+                                        checked={params.weekly_seasonality ?? true}
+                                        onChange={(e) => updateModelParams(model.id, { weekly_seasonality: e.target.checked } as any)}
+                                        className="accent-amber-500 w-4 h-4" 
+                                      />
+                                      <span className="text-sm text-slate-300">Weekly</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 p-3 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-amber-500/30">
+                                      <input 
+                                        type="checkbox" 
+                                        checked={params.yearly_seasonality ?? true}
+                                        onChange={(e) => updateModelParams(model.id, { yearly_seasonality: e.target.checked } as any)}
+                                        className="accent-amber-500 w-4 h-4" 
+                                      />
+                                      <span className="text-sm text-slate-300">Yearly</span>
+                                    </label>
+                                  </div>
+                                </div>
+                                
+                                <div>
+                                  <label className="text-xs text-slate-400 mb-2 block">Seasonality Mode</label>
+                                  <select 
+                                    value={params.seasonality_mode ?? 'additive'}
+                                    onChange={(e) => updateModelParams(model.id, { seasonality_mode: e.target.value } as any)}
+                                    className="glass-input w-full p-2 rounded-lg text-sm"
+                                  >
+                                    <option value="additive">Additive</option>
+                                    <option value="multiplicative">Multiplicative</option>
+                                  </select>
+                                </div>
+                                
+                                <div className="col-span-2 p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg">
+                                  <p className="text-[10px] text-purple-300">
+                                    💡 <strong>Lag regressors are key!</strong> Without them, Prophet only uses seasonality (smooth predictions). 
+                                    With lag_1, it uses yesterday's value to predict today → much better for temperature forecasting.
+                                  </p>
+                                </div>
+                              </>
+                              );
+                            })()}
                           </div>
                         </div>
                       ))

@@ -25,7 +25,7 @@ export interface ModelConfig {
   name: string; // Nom affiché (ex: "XGBoost avec Lags")
   
   // Config spécifique (Union type)
-  params: ArimaParams | ProphetParams | MLParams | LinearRegressionParams;
+  params: ArimaParams | ProphetParams | XGBoostParams | MLParams | LinearRegressionParams;
 }
 
 export interface ArimaParams {
@@ -39,10 +39,20 @@ export interface ProphetParams {
   daily_seasonality: boolean;
   weekly_seasonality: boolean;
   yearly_seasonality: boolean;
+  seasonality_mode?: 'additive' | 'multiplicative';
   country_holidays?: string;
 }
 
-// Pour les modèles ML (XGBoost, RF, LightGBM)
+// Pour XGBoost
+export interface XGBoostParams {
+  lags: number[];
+  n_estimators?: number;
+  max_depth?: number;
+  learning_rate?: number;
+  feature_config?: FeatureConfig;
+}
+
+// Pour les modèles ML génériques (RF, LightGBM)
 export interface MLParams {
   lags: number[]; // ex: [1, 7, 30]
   rolling_features: {
