@@ -7,7 +7,8 @@ import Papa from 'papaparse';
 import TimeSeriesChart from '../components/TimeSeriesChart';
 
 // API URL - uses environment variable in production, localhost in development
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Remove trailing slash to avoid double slashes in URLs
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 
 // Debug: log API URL (check browser console)
 if (typeof window !== 'undefined') {
