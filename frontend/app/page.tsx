@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { ModelConfig, ModelType, TimeSeriesData, ModelResult, DateRange, LinearRegressionParams } from '../types/forecasting';
+import { ModelConfig, ModelType, TimeSeriesData, ModelResult, DateRange, LinearRegressionParams, ColumnInfo, FeatureConfig, TemporalFeatureConfig, ExogenousFeatureConfig } from '../types/forecasting';
 import { Upload, Activity, BarChart3, Settings, Play, Plus, X, ChevronRight, FileText, CheckCircle2, Trophy, Timer, Download, Trash2 } from 'lucide-react';
 import Papa from 'papaparse';
 import TimeSeriesChart from '../components/TimeSeriesChart';
@@ -20,6 +20,9 @@ export default function ForecastingPage() {
   const [fullData, setFullData] = useState<any[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Available columns for exogenous features (from /analyze)
+  const [availableColumns, setAvailableColumns] = useState<ColumnInfo[]>([]);
   
   // Dataset Stats State
   const [datasetStats, setDatasetStats] = useState<{
@@ -82,8 +85,9 @@ export default function ForecastingPage() {
     setIsTraining(true);
     
     try {
+      // Use rawData for training (contains all columns including exogenous)
       const payload = {
-        data: fullData,
+        data: rawData,
         data_config: {
           target_column: data.targetColumn,
           date_column: data.dateColumn,
@@ -161,6 +165,11 @@ export default function ForecastingPage() {
         setDatasetStats(result.stats);
         // Update data frequency with detected one
         setData(prev => prev ? { ...prev, frequency: result.stats.frequency } : null);
+        
+        // Store available columns for exogenous features
+        if (result.available_columns) {
+          setAvailableColumns(result.available_columns);
+        }
         
         // Use normalized data from backend (dates in ISO format, values cleaned)
         if (result.normalized_data && result.normalized_data.length > 0) {
@@ -722,18 +731,186 @@ export default function ForecastingPage() {
                                   </label>
                                 </div>
                                 
+                                {/* Temporal Features */}
                                 <div className="col-span-2">
-                                  <label className="text-xs text-slate-400 mb-2 block">Exogenous Variables</label>
+                                  <label className="text-xs text-slate-400 mb-2 block">Temporal Features</label>
                                   <div className="flex flex-wrap gap-2">
-                                    {data?.columns.filter(c => c !== data.dateColumn && c !== data.targetColumn).map(col => (
-                                      <label key={col} className="flex items-center gap-2 p-2 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-amber-500/30">
-                                        <input type="checkbox" className="accent-amber-500 w-4 h-4" />
-                                        <span className="text-sm text-slate-300">{col}</span>
+                                    {[
+                                      { key: 'month', label: 'Month (sin/cos)' },
+                                      { key: 'day_of_week', label: 'Day of Week (sin/cos)' },
+                                      { key: 'day_of_month', label: 'Day of Month' },
+                                      { key: 'week_of_year', label: 'Week of Year' },
+                                      { key: 'year', label: 'Year' },
+                                    ].map(({ key, label }) => (
+                                      <label key={key} className="flex items-center gap-2 p-2 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-amber-500/30">
+                                        <input 
+                                          type="checkbox" 
+                                          checked={(model.params as LinearRegressionParams).feature_config?.temporal?.[key as keyof TemporalFeatureConfig] ?? false}
+                                          onChange={(e) => {
+                                            const currentConfig = (model.params as LinearRegressionParams).feature_config || {
+                                              target_lags: (model.params as LinearRegressionParams).lags || [1, 7],
+                                              temporal: { month: false, day_of_week: false, day_of_month: false, week_of_year: false, year: false },
+                                              exogenous: []
+                                            };
+                                            updateModelParams(model.id, {
+                                              feature_config: {
+                                                ...currentConfig,
+                                                temporal: {
+                                                  ...currentConfig.temporal,
+                                                  [key]: e.target.checked
+                                                }
+                                              }
+                                            });
+                                          }}
+                                          className="accent-amber-500 w-4 h-4" 
+                                        />
+                                        <span className="text-sm text-slate-300">{label}</span>
                                       </label>
                                     ))}
                                   </div>
-                                  <p className="text-[10px] text-slate-500 mt-1">Select additional features to include</p>
+                                  <p className="text-[10px] text-slate-500 mt-1">Extract temporal patterns from date</p>
                                 </div>
+
+                                {/* Exogenous Variables */}
+                                {availableColumns.filter(c => c.dtype === 'numeric').length > 0 && (
+                                  <div className="col-span-2">
+                                    <label className="text-xs text-slate-400 mb-2 block">Exogenous Variables</label>
+                                    <div className="space-y-3">
+                                      {availableColumns.filter(c => c.dtype === 'numeric').map(col => {
+                                        const currentConfig = (model.params as LinearRegressionParams).feature_config;
+                                        const exogConfig = currentConfig?.exogenous?.find(e => e.column === col.name);
+                                        const isEnabled = !!exogConfig;
+                                        const selectedLags = exogConfig?.lags || [];
+                                        const availableLags = [0, 1, 2, 3, 7, 14, 30];
+                                        
+                                        const getBaseConfig = () => currentConfig || {
+                                          target_lags: (model.params as LinearRegressionParams).lags || [1, 7],
+                                          temporal: { month: false, day_of_week: false, day_of_month: false, week_of_year: false, year: false },
+                                          exogenous: []
+                                        };
+                                        
+                                        const toggleLag = (lag: number) => {
+                                          const base = getBaseConfig();
+                                          const currentExog = base.exogenous.find(e => e.column === col.name);
+                                          if (!currentExog) return;
+                                          
+                                          const newLags = currentExog.lags.includes(lag)
+                                            ? currentExog.lags.filter(l => l !== lag)
+                                            : [...currentExog.lags, lag].sort((a, b) => a - b);
+                                          
+                                          updateModelParams(model.id, {
+                                            feature_config: {
+                                              ...base,
+                                              exogenous: base.exogenous.map(ex => 
+                                                ex.column === col.name ? { ...ex, lags: newLags } : ex
+                                              )
+                                            }
+                                          });
+                                        };
+                                        
+                                        return (
+                                          <div key={col.name} className={`p-3 rounded-lg border transition-all ${isEnabled ? 'bg-amber-500/5 border-amber-500/30' : 'bg-black/20 border-white/5'}`}>
+                                            {/* Header: checkbox + name */}
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                              <input 
+                                                type="checkbox" 
+                                                checked={isEnabled}
+                                                onChange={(e) => {
+                                                  const base = getBaseConfig();
+                                                  if (e.target.checked) {
+                                                    updateModelParams(model.id, {
+                                                      feature_config: {
+                                                        ...base,
+                                                        exogenous: [...base.exogenous, {
+                                                          column: col.name,
+                                                          lags: [0, 1],  // Default: current value + lag 1
+                                                          use_actual: false
+                                                        }]
+                                                      }
+                                                    });
+                                                  } else {
+                                                    updateModelParams(model.id, {
+                                                      feature_config: {
+                                                        ...base,
+                                                        exogenous: base.exogenous.filter(e => e.column !== col.name)
+                                                      }
+                                                    });
+                                                  }
+                                                }}
+                                                className="accent-amber-500 w-4 h-4" 
+                                              />
+                                              <span className={`text-sm font-medium ${isEnabled ? 'text-amber-400' : 'text-slate-300'}`}>{col.name}</span>
+                                              <span className="text-[10px] text-slate-500">
+                                                {col.missing_count > 0 ? `(${col.missing_count} missing)` : ''}
+                                              </span>
+                                            </label>
+                                            
+                                            {/* Lag selection when enabled */}
+                                            {isEnabled && (
+                                              <div className="mt-3 pl-6 space-y-2">
+                                                {/* Lag buttons */}
+                                                <div>
+                                                  <span className="text-[10px] text-slate-400 block mb-1">Select lags to include:</span>
+                                                  <div className="flex flex-wrap gap-1">
+                                                    {availableLags.map(lag => (
+                                                      <button
+                                                        key={lag}
+                                                        type="button"
+                                                        onClick={() => toggleLag(lag)}
+                                                        className={`px-2 py-1 text-xs rounded transition-all ${
+                                                          selectedLags.includes(lag)
+                                                            ? 'bg-amber-500 text-black font-medium'
+                                                            : 'bg-white/5 text-slate-400 hover:bg-white/10'
+                                                        }`}
+                                                      >
+                                                        {lag === 0 ? 't' : `t-${lag}`}
+                                                      </button>
+                                                    ))}
+                                                  </div>
+                                                </div>
+                                                
+                                                {/* Delta option */}
+                                                <div className="flex items-center gap-2">
+                                                  <span className="text-[10px] text-slate-400">Delta (t minus lag):</span>
+                                                  <select
+                                                    value={exogConfig?.delta_lag ?? ''}
+                                                    onChange={(e) => {
+                                                      const base = getBaseConfig();
+                                                      const val = e.target.value ? parseInt(e.target.value) : undefined;
+                                                      updateModelParams(model.id, {
+                                                        feature_config: {
+                                                          ...base,
+                                                          exogenous: base.exogenous.map(ex => 
+                                                            ex.column === col.name ? { ...ex, delta_lag: val } : ex
+                                                          )
+                                                        }
+                                                      });
+                                                    }}
+                                                    className="glass-input px-2 py-1 rounded text-xs"
+                                                  >
+                                                    <option value="">None</option>
+                                                    {[1, 2, 3, 7, 14, 30].map(lag => (
+                                                      <option key={lag} value={lag}>t - t-{lag}</option>
+                                                    ))}
+                                                  </select>
+                                                </div>
+                                                
+                                                {/* Summary */}
+                                                {selectedLags.length > 0 && (
+                                                  <div className="text-[10px] text-slate-500">
+                                                    Features: {selectedLags.map(l => `${col.name}_lag_${l}`).join(', ')}
+                                                    {exogConfig?.delta_lag && `, ${col.name}_delta_${exogConfig.delta_lag}`}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                    <p className="text-[10px] text-slate-500 mt-2">t = current value, t-1 = previous period, etc.</p>
+                                  </div>
+                                )}
                               </>
                             )}
 

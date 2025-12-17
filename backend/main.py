@@ -68,6 +68,13 @@ class DatasetAnalysisRequest(BaseModel):
     date_column: str
     target_column: str
 
+class ColumnInfo(BaseModel):
+    """Information about a column in the dataset."""
+    name: str
+    dtype: str  # "numeric", "string", "date", "boolean"
+    missing_count: int
+    sample_values: List[Any]
+
 class DatasetStats(BaseModel):
     date_min: str
     date_max: str
@@ -89,7 +96,31 @@ class DatasetAnalysisResponse(BaseModel):
     status: str
     stats: Optional[DatasetStats] = None
     normalized_data: Optional[List[NormalizedDataPoint]] = None  # Clean data for frontend
+    available_columns: Optional[List[ColumnInfo]] = None  # Exogenous columns info
     message: Optional[str] = None
+
+# Schema for feature configuration
+class ExogenousFeatureConfig(BaseModel):
+    """Configuration for a single exogenous feature."""
+    column: str
+    lags: List[int] = []           # Lag values to create (e.g., [1, 7])
+    use_actual: bool = False       # Use actual value at prediction time
+    delta_lag: Optional[int] = None  # Compute delta vs this lag
+    pct_change_lag: Optional[int] = None  # Compute % change vs this lag
+
+class TemporalFeatureConfig(BaseModel):
+    """Configuration for temporal features extracted from date."""
+    month: bool = False        # Month (1-12), cyclical encoded
+    day_of_week: bool = False  # Day of week (0-6), cyclical encoded
+    day_of_month: bool = False # Day of month (1-31)
+    week_of_year: bool = False # Week of year (1-52)
+    year: bool = False         # Year as numeric
+
+class FeatureConfig(BaseModel):
+    """Complete feature configuration for model training."""
+    target_lags: List[int] = [1, 7]  # Lags of target variable
+    temporal: TemporalFeatureConfig = TemporalFeatureConfig()
+    exogenous: List[ExogenousFeatureConfig] = []
 
 # ============================================================================
 # FASTAPI APP
@@ -281,13 +312,110 @@ def parse_dates_flexible(df: pl.DataFrame, date_col: str) -> pl.DataFrame:
     return best_df
 
 
-def create_lag_features(df: pl.DataFrame, target_col: str, lags: List[int]) -> pl.DataFrame:
-    """Create lag features for time series prediction."""
-    for lag in lags:
+def build_features(
+    df: pl.DataFrame,
+    date_col: str,
+    target_col: str,
+    feature_config: FeatureConfig
+) -> tuple[pl.DataFrame, List[str]]:
+    """
+    Build all features for model training.
+    
+    Returns:
+        - DataFrame with all features added
+        - List of feature column names (for model training)
+    """
+    feature_names = []
+    
+    # 1. Target lags
+    for lag in feature_config.target_lags:
+        col_name = f"target_lag_{lag}"
         df = df.with_columns(
-            pl.col(target_col).shift(lag).alias(f"lag_{lag}")
+            pl.col(target_col).shift(lag).alias(col_name)
         )
-    return df
+        feature_names.append(col_name)
+    
+    # 2. Temporal features (from date column)
+    temporal = feature_config.temporal
+    
+    if temporal.month:
+        # Cyclical encoding: sin and cos for month (1-12)
+        df = df.with_columns([
+            (2 * np.pi * pl.col(date_col).dt.month() / 12).sin().alias("month_sin"),
+            (2 * np.pi * pl.col(date_col).dt.month() / 12).cos().alias("month_cos"),
+        ])
+        feature_names.extend(["month_sin", "month_cos"])
+    
+    if temporal.day_of_week:
+        # Cyclical encoding: sin and cos for day of week (0-6)
+        df = df.with_columns([
+            (2 * np.pi * pl.col(date_col).dt.weekday() / 7).sin().alias("dow_sin"),
+            (2 * np.pi * pl.col(date_col).dt.weekday() / 7).cos().alias("dow_cos"),
+        ])
+        feature_names.extend(["dow_sin", "dow_cos"])
+    
+    if temporal.day_of_month:
+        df = df.with_columns(
+            pl.col(date_col).dt.day().alias("day_of_month")
+        )
+        feature_names.append("day_of_month")
+    
+    if temporal.week_of_year:
+        df = df.with_columns(
+            pl.col(date_col).dt.week().alias("week_of_year")
+        )
+        feature_names.append("week_of_year")
+    
+    if temporal.year:
+        df = df.with_columns(
+            pl.col(date_col).dt.year().alias("year")
+        )
+        feature_names.append("year")
+    
+    # 3. Exogenous features
+    for exog in feature_config.exogenous:
+        col = exog.column
+        
+        # Skip if column doesn't exist
+        if col not in df.columns:
+            print(f"Warning: exogenous column '{col}' not found, skipping")
+            continue
+        
+        # Lags of exogenous variable
+        for lag in exog.lags:
+            col_name = f"{col}_lag_{lag}"
+            df = df.with_columns(
+                pl.col(col).shift(lag).alias(col_name)
+            )
+            feature_names.append(col_name)
+        
+        # Actual value (for features known at prediction time, e.g., planned promotions)
+        if exog.use_actual:
+            col_name = f"{col}_actual"
+            df = df.with_columns(
+                pl.col(col).alias(col_name)
+            )
+            feature_names.append(col_name)
+        
+        # Delta (difference vs lag)
+        if exog.delta_lag is not None:
+            col_name = f"{col}_delta_{exog.delta_lag}"
+            df = df.with_columns(
+                (pl.col(col) - pl.col(col).shift(exog.delta_lag)).alias(col_name)
+            )
+            feature_names.append(col_name)
+        
+        # Percentage change vs lag
+        if exog.pct_change_lag is not None:
+            col_name = f"{col}_pct_{exog.pct_change_lag}"
+            df = df.with_columns(
+                ((pl.col(col) - pl.col(col).shift(exog.pct_change_lag)) / 
+                 pl.col(col).shift(exog.pct_change_lag).abs().clip(lower_bound=1e-10)).alias(col_name)
+            )
+            feature_names.append(col_name)
+    
+    return df, feature_names
+
 
 def filter_by_date_range(df: pl.DataFrame, date_col: str, start: str, end: str) -> pl.DataFrame:
     """Filter dataframe by date range."""
@@ -331,40 +459,57 @@ def train_linear_regression(
     params: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
-    Train a Linear Regression model with lag features.
+    Train a Linear Regression model with configurable features.
     
-    Supports:
-    - target_mode: "raw" (predict y directly) or "residual" (predict y - y_lag)
-    - residual_lag: which lag to subtract when using residual mode (default: 1)
-    - standardize: whether to standardize features (useful for regularized models)
+    Params:
+    - lags: List[int] - target lags (legacy, used if feature_config not provided)
+    - target_mode: "raw" or "residual"
+    - residual_lag: int - which lag to subtract in residual mode
+    - standardize: bool - standardize features
+    - feature_config: dict - full feature configuration (temporal, exogenous)
     
     Returns metrics and predictions.
     """
     start_time = time.time()
     
     # Get params
-    lags = params.get("lags", [1, 7])
-    if isinstance(lags, str):
-        lags = [int(x.strip()) for x in lags.split(",")]
+    target_mode = params.get("target_mode", "raw")
+    residual_lag = params.get("residual_lag", 1)
+    standardize = params.get("standardize", False)
     
-    target_mode = params.get("target_mode", "raw")  # "raw" or "residual"
-    residual_lag = params.get("residual_lag", 1)    # which lag to subtract
-    standardize = params.get("standardize", False)   # standardize features
+    # Build feature config from params
+    # Support both legacy "lags" param and new "feature_config" structure
+    if "feature_config" in params:
+        fc = params["feature_config"]
+        feature_config = FeatureConfig(
+            target_lags=fc.get("target_lags", [1, 7]),
+            temporal=TemporalFeatureConfig(**fc.get("temporal", {})),
+            exogenous=[ExogenousFeatureConfig(**e) for e in fc.get("exogenous", [])]
+        )
+    else:
+        # Legacy mode: just use lags param
+        lags = params.get("lags", [1, 7])
+        if isinstance(lags, str):
+            lags = [int(x.strip()) for x in lags.split(",")]
+        feature_config = FeatureConfig(target_lags=lags)
     
-    # Create lag features on full dataset
-    df_features = create_lag_features(df.clone(), target_col, lags)
+    # Build features on full dataset
+    df_features, feature_names = build_features(df.clone(), date_col, target_col, feature_config)
     
     # If residual mode, create the residual target
     if target_mode == "residual":
-        # Ensure residual_lag is in lags (we need it for reconstruction)
-        if residual_lag not in lags:
+        residual_col = f"target_lag_{residual_lag}"
+        # Ensure we have the residual lag feature
+        if residual_col not in df_features.columns:
             df_features = df_features.with_columns(
-                pl.col(target_col).shift(residual_lag).alias(f"lag_{residual_lag}")
+                pl.col(target_col).shift(residual_lag).alias(residual_col)
             )
+            if residual_col not in feature_names:
+                feature_names.append(residual_col)
         
         # Create residual target: y_residual = y - y_lag
         df_features = df_features.with_columns(
-            (pl.col(target_col) - pl.col(f"lag_{residual_lag}")).alias("target_residual")
+            (pl.col(target_col) - pl.col(residual_col)).alias("target_residual")
         )
         effective_target = "target_residual"
     else:
@@ -381,16 +526,17 @@ def train_linear_regression(
     
     train_df = pl.concat(train_dfs)
     
-    # Drop rows with NaN (from lag creation)
-    lag_cols = [f"lag_{lag}" for lag in lags]
-    cols_to_check = lag_cols + ([effective_target] if target_mode == "residual" else [])
+    # Drop rows with NaN (from lag/feature creation)
+    cols_to_check = feature_names.copy()
+    if target_mode == "residual":
+        cols_to_check.append(effective_target)
     train_df = train_df.drop_nulls(subset=cols_to_check)
     
     if train_df.height == 0:
-        raise ValueError("Not enough data after creating lag features")
+        raise ValueError("Not enough data after creating features")
     
     # Prepare X and y for training
-    X_train = train_df.select(lag_cols).to_numpy()
+    X_train = train_df.select(feature_names).to_numpy()
     y_train = train_df.select(effective_target).to_numpy().flatten()
     
     # Standardization
@@ -413,13 +559,19 @@ def train_linear_regression(
     
     for pr in prediction_ranges:
         pred_df = filter_by_date_range(df_features, date_col, pr.start, pr.end)
-        cols_to_check_pred = lag_cols + ([effective_target, f"lag_{residual_lag}"] if target_mode == "residual" else [])
+        
+        # Check required columns for prediction
+        cols_to_check_pred = feature_names.copy()
+        if target_mode == "residual":
+            residual_col = f"target_lag_{residual_lag}"
+            if residual_col not in cols_to_check_pred:
+                cols_to_check_pred.append(residual_col)
         pred_df = pred_df.drop_nulls(subset=cols_to_check_pred)
         
         if pred_df.height == 0:
             continue
         
-        X_pred = pred_df.select(lag_cols).to_numpy()
+        X_pred = pred_df.select(feature_names).to_numpy()
         y_actual_original = pred_df.select(target_col).to_numpy().flatten()
         dates = pred_df.select(date_col).to_series().to_list()
         
@@ -431,7 +583,7 @@ def train_linear_regression(
         
         # If residual mode, reconstruct original scale: y_pred = y_pred_residual + y_lag
         if target_mode == "residual":
-            y_lag_values = pred_df.select(f"lag_{residual_lag}").to_numpy().flatten()
+            y_lag_values = pred_df.select(f"target_lag_{residual_lag}").to_numpy().flatten()
             y_pred = y_pred_raw + y_lag_values
         else:
             y_pred = y_pred_raw
@@ -458,7 +610,7 @@ def train_linear_regression(
     
     # Extract feature importance (coefficients for Linear Regression)
     feature_importance = []
-    for feat_name, coef in zip(lag_cols, model.coef_):
+    for feat_name, coef in zip(feature_names, model.coef_):
         feature_importance.append({
             "feature": feat_name,
             "importance": float(abs(coef))  # Use absolute value for importance
@@ -566,10 +718,40 @@ async def analyze_dataset(request: DatasetAnalysisRequest):
             for row in clean_df.iter_rows(named=True)
         ]
         
+        # Build available columns info (excluding date and target)
+        available_columns = []
+        for col_name in df.columns:
+            if col_name in [date_col, target_col]:
+                continue
+            
+            col_series = df[col_name]
+            dtype = col_series.dtype
+            
+            # Determine column type
+            if dtype in [pl.Float64, pl.Float32, pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
+                dtype_str = "numeric"
+            elif dtype == pl.Boolean:
+                dtype_str = "boolean"
+            elif dtype in [pl.Datetime, pl.Date]:
+                dtype_str = "date"
+            else:
+                dtype_str = "string"
+            
+            # Get sample values (first 5 non-null)
+            sample_vals = col_series.drop_nulls().head(5).to_list()
+            
+            available_columns.append(ColumnInfo(
+                name=col_name,
+                dtype=dtype_str,
+                missing_count=col_series.null_count(),
+                sample_values=sample_vals
+            ))
+        
         return DatasetAnalysisResponse(
             status="success",
             stats=stats,
-            normalized_data=normalized_data
+            normalized_data=normalized_data,
+            available_columns=available_columns
         )
         
     except Exception as e:
@@ -660,6 +842,21 @@ async def train_models(request: TrainingRequest):
         
         # Remove rows with null target values
         df = df.filter(pl.col(target_col).is_not_null())
+        
+        # Convert potential exogenous columns to numeric
+        # (columns that are not date or target and might be used as features)
+        for col_name in df.columns:
+            if col_name in [date_col, target_col]:
+                continue
+            # Try to convert to float if not already numeric
+            col_dtype = df[col_name].dtype
+            if col_dtype not in [pl.Float64, pl.Float32, pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
+                try:
+                    df = df.with_columns(
+                        pl.col(col_name).cast(pl.Utf8).str.strip_chars().cast(pl.Float64, strict=False)
+                    )
+                except Exception:
+                    pass  # Keep as is if conversion fails
         
         # Sort by date
         df = df.sort(date_col)

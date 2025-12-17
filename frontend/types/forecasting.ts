@@ -52,13 +52,44 @@ export interface MLParams {
   use_exogenous: boolean;
 }
 
+// Feature configuration (new unified structure)
+export interface ExogenousFeatureConfig {
+  column: string;
+  lags: number[];           // Lag values to create
+  use_actual: boolean;      // Use actual value at prediction time
+  delta_lag?: number;       // Compute delta vs this lag
+  pct_change_lag?: number;  // Compute % change vs this lag
+}
+
+export interface TemporalFeatureConfig {
+  month: boolean;           // Cyclical encoded month
+  day_of_week: boolean;     // Cyclical encoded day of week
+  day_of_month: boolean;    // Day of month (1-31)
+  week_of_year: boolean;    // Week of year (1-52)
+  year: boolean;            // Year as numeric
+}
+
+export interface FeatureConfig {
+  target_lags: number[];
+  temporal: TemporalFeatureConfig;
+  exogenous: ExogenousFeatureConfig[];
+}
+
 // Pour Linear Regression
 export interface LinearRegressionParams {
-  lags: number[];
-  exogenous_features?: string[];
+  lags: number[];  // Legacy support
   target_mode?: 'raw' | 'residual';
   residual_lag?: number;
   standardize?: boolean;
+  feature_config?: FeatureConfig;  // New unified feature config
+}
+
+// Column info from /analyze response
+export interface ColumnInfo {
+  name: string;
+  dtype: 'numeric' | 'string' | 'date' | 'boolean';
+  missing_count: number;
+  sample_values: any[];
 }
 
 // 4. L'objet complet envoyé au Backend pour l'entraînement
