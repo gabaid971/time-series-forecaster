@@ -48,6 +48,62 @@ export default function ForecastingPage() {
   } | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
+  // Export forecasts to CSV
+  const exportForecastsToCSV = () => {
+    if (!results || results.length === 0 || !data) return;
+
+    // Build a map of all dates and their data
+    const dateMap = new Map<string, any>();
+
+    // Collect all forecasts from all models
+    results.forEach(result => {
+      if (result.error) return; // Skip models with errors
+      
+      result.forecast.forEach((point: any) => {
+        const dateKey = point[data.dateColumn];
+        if (!dateMap.has(dateKey)) {
+          dateMap.set(dateKey, {
+            date: dateKey,
+            actual: point[data.targetColumn]
+          });
+        }
+        // Add this model's prediction
+        dateMap.get(dateKey)[result.model_name] = point.prediction;
+      });
+    });
+
+    // Convert to array and sort by date
+    const rows = Array.from(dateMap.values()).sort((a, b) => 
+      a.date.localeCompare(b.date)
+    );
+
+    // Create CSV header
+    const modelNames = results.filter(r => !r.error).map(r => r.model_name);
+    const headers = ['date', 'actual', ...modelNames];
+    
+    // Create CSV content
+    let csvContent = headers.join(',') + '\n';
+    rows.forEach(row => {
+      const values = [
+        row.date,
+        row.actual ?? '',
+        ...modelNames.map(name => row[name] ?? '')
+      ];
+      csvContent += values.join(',') + '\n';
+    });
+
+    // Download CSV
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `forecasts_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   // Results State
   const [isTraining, setIsTraining] = useState(false);
   const [results, setResults] = useState<ModelResult[]>([]);
@@ -226,19 +282,20 @@ export default function ForecastingPage() {
         
         // Use normalized data from backend (dates in ISO format, values cleaned)
         if (result.normalized_data && result.normalized_data.length > 0) {
-          // Convert to format expected by chart: [{date: 'YYYY-MM-DD', value: number}]
+          // Convert to format expected by chart: keep full datetime for minute-level data
           const normalizedData = result.normalized_data.map((point: { date: string; value: number }) => ({
-            [data.dateColumn]: point.date.split('T')[0], // Keep just YYYY-MM-DD
+            [data.dateColumn]: point.date, // Keep full ISO datetime (YYYY-MM-DDTHH:MM:SS)
             [data.targetColumn]: point.value
           }));
           setFullData(normalizedData);
           
           // Set default training/prediction ranges from stats
+          // For date inputs, extract just YYYY-MM-DD part
           const dateMin = result.stats.date_min.split('T')[0];
           const dateMax = result.stats.date_max.split('T')[0];
           const totalRows = normalizedData.length;
           const splitIndex = Math.floor(totalRows * 0.8);
-          const splitDate = normalizedData[splitIndex]?.[data.dateColumn] || dateMax;
+          const splitDate = (normalizedData[splitIndex]?.[data.dateColumn] || dateMax).split('T')[0];
           
           setTrainingRanges([{ start: dateMin, end: splitDate }]);
           setPredictionRanges([{ start: splitDate, end: dateMax }]);
@@ -271,6 +328,7 @@ export default function ForecastingPage() {
     const modelNumber = existingCount + 1;
     
     const typeNames: Record<ModelType, string> = {
+      'LAG': 'Lag',
       'LINEAR_REGRESSION': 'Linear Regression',
       'ARIMA': 'ARIMA',
       'PROPHET': 'Prophet',
@@ -280,6 +338,7 @@ export default function ForecastingPage() {
     
     // Default params per model type
     const defaultParams: Record<ModelType, any> = {
+      'LAG': { lag: 1 },
       'LINEAR_REGRESSION': { lags: [1, 7] },
       'XGBOOST': { lags: [1, 7, 14, 30], n_estimators: 100, max_depth: 6, learning_rate: 0.1 },
       'ARIMA': { p: 1, d: 1, q: 1 },
@@ -554,6 +613,7 @@ export default function ForecastingPage() {
                   
                   <div className="grid grid-cols-2 lg:grid-cols-1 gap-2 lg:space-y-3">
                     {[
+                      { id: 'LAG', name: 'Lag', desc: 'Naïve Baseline', Icon: Activity },
                       { id: 'LINEAR_REGRESSION', name: 'Linear Regression', desc: 'Simple Baseline', Icon: LineChart },
                       { id: 'ARIMA', name: 'ARIMA', desc: 'Statistical Baseline', Icon: Activity },
                       { id: 'PROPHET', name: 'Prophet', desc: 'Facebook model', Icon: Target },
@@ -726,6 +786,21 @@ export default function ForecastingPage() {
 
                           {/* Dynamic Forms */}
                           <div className="grid grid-cols-2 gap-6">
+                            {model.type === 'LAG' && (
+                              <div className="col-span-2">
+                                <label className="text-xs text-slate-400 mb-2 block">Lag Period</label>
+                                <input 
+                                  type="number" 
+                                  min="1"
+                                  value={model.params.lag ?? 1}
+                                  onChange={(e) => updateModelParams(model.id, { lag: parseInt(e.target.value) || 1 })}
+                                  className="glass-input w-full p-2 rounded-lg text-sm" 
+                                  placeholder="1"
+                                />
+                                <p className="text-[10px] text-slate-500 mt-1">Predict using value from N periods ago (e.g., lag=1 uses previous period)</p>
+                              </div>
+                            )}
+
                             {model.type === 'LINEAR_REGRESSION' && (
                               <>
                                 <div className="col-span-2">
@@ -801,6 +876,8 @@ export default function ForecastingPage() {
                                       { key: 'day_of_month', label: 'Day of Month' },
                                       { key: 'week_of_year', label: 'Week of Year' },
                                       { key: 'year', label: 'Year' },
+                                      { key: 'hour_of_day', label: 'Hour of Day (sin/cos)' },
+                                      { key: 'minute_of_day', label: 'Minute of Day (sin/cos)' },
                                     ].map(({ key, label }) => (
                                       <label key={key} className="flex items-center gap-2 p-2 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-amber-500/30">
                                         <input 
@@ -809,7 +886,7 @@ export default function ForecastingPage() {
                                           onChange={(e) => {
                                             const currentConfig = (model.params as LinearRegressionParams).feature_config || {
                                               target_lags: (model.params as LinearRegressionParams).lags || [1, 7],
-                                              temporal: { month: false, day_of_week: false, day_of_month: false, week_of_year: false, year: false },
+                                              temporal: { month: false, day_of_week: false, day_of_month: false, week_of_year: false, year: false, hour_of_day: false, minute_of_day: false },
                                               exogenous: []
                                             };
                                             updateModelParams(model.id, {
@@ -1076,6 +1153,8 @@ export default function ForecastingPage() {
                                       { key: 'day_of_month', label: 'Day of Month' },
                                       { key: 'week_of_year', label: 'Week of Year' },
                                       { key: 'year', label: 'Year' },
+                                      { key: 'hour_of_day', label: 'Hour of Day (sin/cos)' },
+                                      { key: 'minute_of_day', label: 'Minute of Day (sin/cos)' },
                                     ].map(({ key, label }) => (
                                       <label key={key} className="flex items-center gap-2 p-2 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-amber-500/30">
                                         <input 
@@ -1442,7 +1521,15 @@ export default function ForecastingPage() {
                     {/* Prediction Visualization */}
                     {results.length > 0 && data && (
                       <div className="bg-white/5 border border-white/10 rounded-xl p-3 sm:p-4">
-                        <h3 className="font-semibold text-sm sm:text-base text-white mb-3 sm:mb-4">Forecast Visualization</h3>
+                        <div className="flex justify-between items-center mb-3 sm:mb-4">
+                          <h3 className="font-semibold text-sm sm:text-base text-white">Forecast Visualization</h3>
+                          <button 
+                            onClick={exportForecastsToCSV}
+                            className="text-xs flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 hover:text-amber-300 border border-amber-500/20 transition-all"
+                          >
+                            <Download size={14} /> Export CSV
+                          </button>
+                        </div>
                         <TimeSeriesChart 
                           data={results[0].forecast} 
                           dateColumn={data.dateColumn} 
@@ -1458,11 +1545,8 @@ export default function ForecastingPage() {
 
                     {/* Metrics Table - Desktop */}
                     <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden hidden sm:block">
-                      <div className="p-3 sm:p-4 border-b border-white/10 flex justify-between items-center">
+                      <div className="p-3 sm:p-4 border-b border-white/10">
                         <h3 className="font-semibold text-sm sm:text-base text-white">Model Leaderboard</h3>
-                        <button className="text-xs flex items-center gap-2 text-slate-400 hover:text-white transition">
-                          <Download size={14} /> Export CSV
-                        </button>
                       </div>
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm text-left text-slate-400">

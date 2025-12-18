@@ -12,6 +12,7 @@ export interface TimeSeriesData {
 
 // 2. Types de Modèles
 export type ModelType = 
+  | 'LAG'
   | 'LINEAR_REGRESSION'
   | 'ARIMA' 
   | 'PROPHET' 
@@ -25,7 +26,11 @@ export interface ModelConfig {
   name: string; // Nom affiché (ex: "XGBoost avec Lags")
   
   // Config spécifique (Union type)
-  params: ArimaParams | ProphetParams | XGBoostParams | MLParams | LinearRegressionParams;
+  params: LagParams | ArimaParams | ProphetParams | XGBoostParams | MLParams | LinearRegressionParams;
+}
+
+export interface LagParams {
+  lag: number;
 }
 
 export interface ArimaParams {

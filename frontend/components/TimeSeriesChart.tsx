@@ -23,13 +23,13 @@ interface TimeSeriesChartProps {
 
 export default function TimeSeriesChart({ data, dateColumn, targetColumn, title, predictions }: TimeSeriesChartProps) {
   // Data is already normalized with ISO format dates from backend
-  // Just extract the date strings directly
+  // Extract date strings (keep full datetime for minute-level data)
   const xValues = data.map(row => {
     const dateVal = row[dateColumn];
-    // Handle both string and Date objects, extract YYYY-MM-DD
+    // Handle both string and Date objects, keep full ISO datetime
     if (!dateVal) return '';
-    if (typeof dateVal === 'string') return dateVal.split('T')[0];
-    if (dateVal instanceof Date) return dateVal.toISOString().split('T')[0];
+    if (typeof dateVal === 'string') return dateVal; // Keep full ISO datetime
+    if (dateVal instanceof Date) return dateVal.toISOString();
     return String(dateVal);
   });
   const yValues = data.map(row => row[targetColumn]);
@@ -48,11 +48,11 @@ export default function TimeSeriesChart({ data, dateColumn, targetColumn, title,
 
   if (predictions && predictions.length > 0) {
     predictions.forEach((pred, idx) => {
-      // Predictions also have ISO format dates from backend
+      // Predictions also have ISO format dates from backend (keep full datetime)
       const predX = pred.data.map(row => {
         const dateVal = row[dateColumn];
         if (!dateVal) return '';
-        if (typeof dateVal === 'string') return dateVal.split('T')[0];
+        if (typeof dateVal === 'string') return dateVal; // Keep full ISO datetime
         return String(dateVal);
       });
       const predY = pred.data.map(row => row['prediction'] !== undefined ? row['prediction'] : row[targetColumn]);

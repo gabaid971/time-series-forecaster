@@ -128,6 +128,8 @@ class TemporalFeatureConfig(BaseModel):
     day_of_month: bool = False # Day of month (1-31)
     week_of_year: bool = False # Week of year (1-52)
     year: bool = False         # Year as numeric
+    hour_of_day: bool = False  # Hour of day (0-23), cyclical encoded
+    minute_of_day: bool = False # Minute of day (0-1439), cyclical encoded
 
 class FeatureConfig(BaseModel):
     """Complete feature configuration for model training."""
@@ -385,6 +387,23 @@ def build_features(
         )
         feature_names.append("year")
     
+    if temporal.hour_of_day:
+        # Cyclical encoding: sin and cos for hour of day (0-23)
+        df = df.with_columns([
+            (2 * np.pi * pl.col(date_col).dt.hour() / 24).sin().alias("hour_sin"),
+            (2 * np.pi * pl.col(date_col).dt.hour() / 24).cos().alias("hour_cos"),
+        ])
+        feature_names.extend(["hour_sin", "hour_cos"])
+    
+    if temporal.minute_of_day:
+        # Cyclical encoding: sin and cos for minute of day (0-1439)
+        # minute_of_day = hour * 60 + minute
+        df = df.with_columns([
+            (2 * np.pi * (pl.col(date_col).dt.hour() * 60 + pl.col(date_col).dt.minute()) / 1440).sin().alias("minute_of_day_sin"),
+            (2 * np.pi * (pl.col(date_col).dt.hour() * 60 + pl.col(date_col).dt.minute()) / 1440).cos().alias("minute_of_day_cos"),
+        ])
+        feature_names.extend(["minute_of_day_sin", "minute_of_day_cos"])
+    
     # 3. Exogenous features
     for exog in feature_config.exogenous:
         col = exog.column
@@ -462,6 +481,75 @@ def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float
 # ============================================================================
 # MODEL TRAINERS
 # ============================================================================
+
+def train_lag(
+    df: pl.DataFrame,
+    date_col: str,
+    target_col: str,
+    training_ranges: List[DateRange],
+    prediction_ranges: List[DateRange],
+    params: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Baseline model: predict using a simple lag.
+    
+    Params:
+    - lag: int - which lag to use for prediction (default: 1)
+    
+    Returns metrics and predictions.
+    """
+    start_time = time.time()
+    
+    # Get lag parameter
+    lag = params.get("lag", 1)
+    
+    # Create lagged column
+    df_lagged = df.with_columns(
+        pl.col(target_col).shift(lag).alias(f"lag_{lag}")
+    )
+    
+    # Build training data
+    train_dfs = []
+    for tr in training_ranges:
+        range_df = filter_by_date_range(df_lagged, date_col, tr.start, tr.end)
+        train_dfs.append(range_df)
+    
+    train_df = pl.concat(train_dfs) if train_dfs else df_lagged.head(0)
+    train_df = train_df.drop_nulls(subset=[target_col, f"lag_{lag}"])
+    
+    if train_df.height == 0:
+        raise ValueError(f"No training data available after applying lag {lag}")
+    
+    # Calculate metrics on training data
+    y_true = train_df[target_col].to_numpy()
+    y_pred = train_df[f"lag_{lag}"].to_numpy()
+    
+    metrics = calculate_metrics(y_true, y_pred)
+    
+    # Generate predictions for all prediction ranges
+    all_forecasts = []
+    for pr in prediction_ranges:
+        pred_df = filter_by_date_range(df_lagged, date_col, pr.start, pr.end).drop_nulls(subset=[target_col, f"lag_{lag}"])
+        
+        for row in pred_df.iter_rows(named=True):
+            date_value = row[date_col]
+            all_forecasts.append({
+                date_col: date_value.isoformat() if hasattr(date_value, 'isoformat') else str(date_value),
+                "prediction": float(row[f"lag_{lag}"]),
+                target_col: float(row[target_col])
+            })
+    
+    execution_time = time.time() - start_time
+    
+    return {
+        "metrics": {
+            **metrics,
+            "execution_time": execution_time
+        },
+        "forecast": all_forecasts,
+        "feature_importance": None
+    }
+
 
 def train_linear_regression(
     df: pl.DataFrame,
@@ -1221,7 +1309,16 @@ async def train_models(request: TrainingRequest):
         # 2. Train each requested model
         for model_config in request.models:
             try:
-                if model_config.type == "LINEAR_REGRESSION":
+                if model_config.type == "LAG":
+                    result = train_lag(
+                        df=df,
+                        date_col=date_col,
+                        target_col=target_col,
+                        training_ranges=request.data_config.training_ranges,
+                        prediction_ranges=request.data_config.prediction_ranges,
+                        params=model_config.params
+                    )
+                elif model_config.type == "LINEAR_REGRESSION":
                     result = train_linear_regression(
                         df=df,
                         date_col=date_col,
