@@ -792,7 +792,7 @@ export default function ForecastingPage() {
                                 <input 
                                   type="number" 
                                   min="1"
-                                  value={model.params.lag ?? 1}
+                                  value={(model.params as any).lag ?? 1}
                                   onChange={(e) => updateModelParams(model.id, { lag: parseInt(e.target.value) || 1 })}
                                   className="glass-input w-full p-2 rounded-lg text-sm" 
                                   placeholder="1"
