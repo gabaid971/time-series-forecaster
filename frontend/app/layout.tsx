@@ -7,6 +7,9 @@ const inter = Inter({ subsets: ["latin"] });
 export const metadata: Metadata = {
   title: "Time Series Studio",
   description: "Advanced Forecasting Interface",
+  icons: {
+    icon: '/favicon.svg',
+  },
 };
 
 export default function RootLayout({
