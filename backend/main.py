@@ -121,6 +121,13 @@ class ExogenousFeatureConfig(BaseModel):
     delta_lag: Optional[int] = None  # Compute delta vs this lag
     pct_change_lag: Optional[int] = None  # Compute % change vs this lag
 
+class DerivedFeatureConfig(BaseModel):
+    """Configuration for derived features (operations between columns)."""
+    operation: str  # "sum", "product", "ratio", "difference"
+    feature_a: str  # Name of first feature (column name)
+    feature_b: str  # Name of second feature (column name)
+    alias: Optional[str] = None
+
 class TemporalFeatureConfig(BaseModel):
     """Configuration for temporal features extracted from date."""
     month: bool = False        # Month (1-12), cyclical encoded
@@ -136,6 +143,7 @@ class FeatureConfig(BaseModel):
     target_lags: List[int] = [1, 7]  # Lags of target variable
     temporal: TemporalFeatureConfig = TemporalFeatureConfig()
     exogenous: List[ExogenousFeatureConfig] = []
+    derived: List[DerivedFeatureConfig] = []
 
 # ============================================================================
 # FASTAPI APP
@@ -446,6 +454,31 @@ def build_features(
             )
             feature_names.append(col_name)
     
+    # 4. Derived features (operations between existing features)
+    for derived in feature_config.derived:
+        col_a = derived.feature_a
+        col_b = derived.feature_b
+        
+        # Check if columns exist
+        if col_a not in df.columns or col_b not in df.columns:
+            print(f"Warning: derived feature columns '{col_a}' or '{col_b}' not found, skipping")
+            continue
+            
+        alias = derived.alias or f"{col_a}_{derived.operation}_{col_b}"
+        
+        if derived.operation == "sum":
+            df = df.with_columns((pl.col(col_a) + pl.col(col_b)).alias(alias))
+        elif derived.operation == "difference":
+            df = df.with_columns((pl.col(col_a) - pl.col(col_b)).alias(alias))
+        elif derived.operation == "product":
+            df = df.with_columns((pl.col(col_a) * pl.col(col_b)).alias(alias))
+        elif derived.operation == "ratio":
+            df = df.with_columns(
+                (pl.col(col_a) / pl.col(col_b).abs().clip(lower_bound=1e-10)).alias(alias)
+            )
+        
+        feature_names.append(alias)
+    
     return df, feature_names
 
 
@@ -585,7 +618,8 @@ def train_linear_regression(
         feature_config = FeatureConfig(
             target_lags=fc.get("target_lags", [1, 7]),
             temporal=TemporalFeatureConfig(**fc.get("temporal", {})),
-            exogenous=[ExogenousFeatureConfig(**e) for e in fc.get("exogenous", [])]
+            exogenous=[ExogenousFeatureConfig(**e) for e in fc.get("exogenous", [])],
+            derived=[DerivedFeatureConfig(**d) for d in fc.get("derived", [])]
         )
     else:
         # Legacy mode: just use lags param
@@ -756,7 +790,8 @@ def train_xgboost(
         feature_config = FeatureConfig(
             target_lags=fc.get("target_lags", [1, 7]),
             temporal=TemporalFeatureConfig(**fc.get("temporal", {})),
-            exogenous=[ExogenousFeatureConfig(**e) for e in fc.get("exogenous", [])]
+            exogenous=[ExogenousFeatureConfig(**e) for e in fc.get("exogenous", [])],
+            derived=[DerivedFeatureConfig(**d) for d in fc.get("derived", [])]
         )
     else:
         lags = params.get("lags", [1, 7, 14, 30])

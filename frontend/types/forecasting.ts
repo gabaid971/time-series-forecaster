@@ -82,12 +82,22 @@ export interface TemporalFeatureConfig {
   day_of_month: boolean;    // Day of month (1-31)
   week_of_year: boolean;    // Week of year (1-52)
   year: boolean;            // Year as numeric
+  hour_of_day?: boolean;    // Hour of day (0-23)
+  minute_of_day?: boolean;  // Minute of day (0-1439)
+}
+
+export interface DerivedFeatureConfig {
+  operation: 'sum' | 'product' | 'ratio' | 'difference';
+  feature_a: string;
+  feature_b: string;
+  alias?: string;
 }
 
 export interface FeatureConfig {
   target_lags: number[];
   temporal: TemporalFeatureConfig;
   exogenous: ExogenousFeatureConfig[];
+  derived?: DerivedFeatureConfig[];
 }
 
 // Pour Linear Regression
