@@ -15,6 +15,205 @@ if (typeof window !== 'undefined') {
   console.log('🔗 API_URL:', API_URL);
 }
 
+// Tag Input Component for entering multiple integer values
+const TagInput = ({ values, onChange, placeholder }: { values: number[], onChange: (values: number[]) => void, placeholder?: string }) => {
+  const [inputValue, setInputValue] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const addTag = (value: string) => {
+    const num = parseInt(value.trim());
+    if (!isNaN(num) && num >= 0 && !values.includes(num)) {
+      onChange([...values, num].sort((a, b) => a - b));
+      setInputValue('');
+    }
+  };
+
+  const removeTag = (index: number) => {
+    onChange(values.filter((_, i) => i !== index));
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.key === 'Enter' || e.key === ',') && inputValue) {
+      e.preventDefault();
+      addTag(inputValue);
+    } else if (e.key === 'Backspace' && !inputValue && values.length > 0) {
+      onChange(values.slice(0, -1));
+    }
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    // Auto-add on comma (mobile friendly)
+    if (val.includes(',')) {
+      const numStr = val.replace(',', '').trim();
+      if (numStr) addTag(numStr);
+      else setInputValue('');
+    } else {
+      setInputValue(val);
+    }
+  };
+
+  return (
+    <div 
+      onClick={() => inputRef.current?.focus()}
+      className="flex flex-wrap gap-1.5 p-2 glass-input rounded-lg min-h-[42px] cursor-text"
+    >
+      {values.map((tag, idx) => (
+        <span key={idx} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-500 text-black text-sm font-medium rounded">
+          {tag}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              removeTag(idx);
+            }}
+            className="hover:bg-amber-600 rounded-sm p-1 transition-colors touch-manipulation"
+            aria-label={`Remove ${tag}`}
+          >
+            <X size={14} />
+          </button>
+        </span>
+      ))}
+      <input
+        ref={inputRef}
+        type="text"
+        inputMode="numeric"
+        value={inputValue}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        onBlur={() => inputValue && addTag(inputValue)}
+        placeholder={values.length === 0 ? placeholder : ''}
+        className="flex-1 min-w-[80px] bg-transparent outline-none text-sm text-white placeholder:text-slate-600"
+      />
+    </div>
+  );
+};
+
+// Segmented Control Component for binary/ternary choices
+const SegmentedControl = ({ value, options, onChange }: { 
+  value: string, 
+  options: { value: string, label: string }[], 
+  onChange: (value: string) => void 
+}) => {
+  return (
+    <div className="inline-flex bg-black/30 rounded-lg p-1 border border-white/10">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          className={`px-4 py-1.5 text-xs font-medium rounded transition-all ${
+            value === option.value
+              ? 'bg-amber-500 text-black shadow-sm'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+};
+
+// Slider Component for numeric ranges
+const Slider = ({ value, min, max, step, onChange, label }: { 
+  value: number, 
+  min: number, 
+  max: number, 
+  step?: number, 
+  onChange: (value: number) => void,
+  label?: string
+}) => {
+  const [localValue, setLocalValue] = useState(value);
+  
+  useEffect(() => {
+    setLocalValue(value);
+  }, [value]);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-slate-400">{label}</span>
+        <input
+          type="number"
+          value={localValue}
+          onChange={(e) => {
+            const val = parseInt(e.target.value) || min;
+            setLocalValue(val);
+            onChange(val);
+          }}
+          className="glass-input w-20 px-2 py-1 rounded text-xs text-center"
+        />
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step || 1}
+        value={localValue}
+        onChange={(e) => {
+          const val = parseInt(e.target.value);
+          setLocalValue(val);
+          onChange(val);
+        }}
+        className="w-full h-2 bg-black/20 rounded-lg appearance-none cursor-pointer slider-thumb"
+        style={{
+          background: `linear-gradient(to right, rgb(245, 158, 11) 0%, rgb(245, 158, 11) ${((localValue - min) / (max - min)) * 100}%, rgba(0,0,0,0.2) ${((localValue - min) / (max - min)) * 100}%, rgba(0,0,0,0.2) 100%)`
+        }}
+      />
+      <div className="flex justify-between text-[10px] text-slate-600">
+        <span>{min}</span>
+        <span>{max}</span>
+      </div>
+    </div>
+  );
+};
+
+// Single Number Input Component (like TagInput but for one value only)
+const SingleNumberInput = ({ value, onChange, min = 0, placeholder }: {
+  value: number,
+  onChange: (value: number) => void,
+  min?: number,
+  placeholder?: string
+}) => {
+  const [inputValue, setInputValue] = useState(String(value));
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setInputValue(String(value));
+  }, [value]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setInputValue(val);
+    
+    const num = parseInt(val);
+    if (!isNaN(num) && num >= min) {
+      onChange(num);
+    }
+  };
+
+  const handleBlur = () => {
+    const num = parseInt(inputValue);
+    if (isNaN(num) || num < min) {
+      setInputValue(String(value));
+    }
+  };
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      inputMode="numeric"
+      value={inputValue}
+      onChange={handleChange}
+      onBlur={handleBlur}
+      placeholder={placeholder || String(value)}
+      className="glass-input w-full p-2 rounded-lg text-sm text-white"
+    />
+  );
+};
+
 const FeatureConfigPanel = ({ model, updateModelParams, availableColumns }: { model: ModelConfig, updateModelParams: Function, availableColumns: ColumnInfo[] }) => {
   const params = model.params as any;
   const featureConfig: FeatureConfig = params.feature_config || {
@@ -177,19 +376,21 @@ const FeatureConfigPanel = ({ model, updateModelParams, availableColumns }: { mo
         )}
 
         {/* Add new derived feature */}
-        <div className="flex gap-2">
-          <select id={`featA-${model.id}`} className="flex-1 bg-slate-900 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none [&>option]:bg-slate-900 [&>option]:text-white">
-            {allFeatures.map(f => <option key={f} value={f}>{f}</option>)}
-          </select>
-          <select id={`op-${model.id}`} className="w-14 bg-slate-900 border border-white/10 rounded px-1 py-1.5 text-xs text-white outline-none text-center [&>option]:bg-slate-900 [&>option]:text-white">
-            <option value="sum">+</option>
-            <option value="difference">−</option>
-            <option value="product">×</option>
-            <option value="ratio">÷</option>
-          </select>
-          <select id={`featB-${model.id}`} className="flex-1 bg-slate-900 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none [&>option]:bg-slate-900 [&>option]:text-white">
-            {allFeatures.map(f => <option key={f} value={f}>{f}</option>)}
-          </select>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <div className="flex gap-2 flex-1 min-w-0">
+            <select id={`featA-${model.id}`} className="flex-1 min-w-0 bg-slate-900 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none truncate [&>option]:bg-slate-900 [&>option]:text-white">
+              {allFeatures.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+            <select id={`op-${model.id}`} className="w-10 sm:w-14 bg-slate-900 border border-white/10 rounded px-1 py-1.5 text-xs text-white outline-none text-center [&>option]:bg-slate-900 [&>option]:text-white">
+              <option value="sum">+</option>
+              <option value="difference">−</option>
+              <option value="product">×</option>
+              <option value="ratio">÷</option>
+            </select>
+            <select id={`featB-${model.id}`} className="flex-1 min-w-0 bg-slate-900 border border-white/10 rounded px-2 py-1.5 text-xs text-white outline-none truncate [&>option]:bg-slate-900 [&>option]:text-white">
+              {allFeatures.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </div>
           <button 
             onClick={() => {
               const op = (document.getElementById(`op-${model.id}`) as HTMLSelectElement).value as DerivedFeatureConfig['operation'];
@@ -206,9 +407,9 @@ const FeatureConfigPanel = ({ model, updateModelParams, availableColumns }: { mo
                 }]
               }));
             }}
-            className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 rounded text-xs font-medium transition-colors"
+            className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 rounded text-xs font-medium transition-colors sm:w-auto w-full"
           >
-            <Plus size={14} />
+            <Plus size={14} className="mx-auto sm:mx-0" />
           </button>
         </div>
       </div>
@@ -541,7 +742,7 @@ export default function ForecastingPage() {
     const defaultParams: Record<ModelType, any> = {
       'LAG': { lag: 1 },
       'LINEAR_REGRESSION': { lags: [1, 7] },
-      'XGBOOST': { lags: [1, 7, 14, 30], n_estimators: 100, max_depth: 6, learning_rate: 0.1 },
+      'XGBOOST': { lags: [1, 7], n_estimators: 100, max_depth: 3, learning_rate: 0.1 },
       'ARIMA': { p: 1, d: 1, q: 1 },
       'PROPHET': { daily_seasonality: false, weekly_seasonality: true, yearly_seasonality: true, seasonality_mode: 'additive' },
       'NBEATS': {}
@@ -1035,12 +1236,10 @@ export default function ForecastingPage() {
                             {model.type === 'LAG' && (
                               <div className="col-span-2">
                                 <label className="text-xs text-slate-400 mb-2 block">Lag Period</label>
-                                <input 
-                                  type="number" 
-                                  min="1"
+                                <SingleNumberInput
                                   value={(model.params as any).lag ?? 1}
-                                  onChange={(e) => updateModelParams(model.id, { lag: parseInt(e.target.value) || 1 })}
-                                  className="glass-input w-full p-2 rounded-lg text-sm" 
+                                  min={0}
+                                  onChange={(value) => updateModelParams(model.id, { lag: value })}
                                   placeholder="1"
                                 />
                                 <p className="text-[10px] text-slate-500 mt-1">Predict using value from N periods ago (e.g., lag=1 uses previous period)</p>
@@ -1051,32 +1250,25 @@ export default function ForecastingPage() {
                               <>
                                 <div className="col-span-2">
                                   <label className="text-xs text-slate-400 mb-2 block">Target Lags</label>
-                                  <input 
-                                    type="text" 
-                                    defaultValue={'lags' in model.params ? model.params.lags.join(', ') : '1, 7'}
-                                    onBlur={(e) => {
-                                      const lags = parseLagsString(e.target.value);
-                                      if (lags.length > 0) {
-                                        updateModelParams(model.id, { lags });
-                                      }
-                                    }}
-                                    className="glass-input w-full p-2 rounded-lg text-sm" 
-                                    placeholder="1, 7, 14"
+                                  <TagInput
+                                    values={'lags' in model.params ? model.params.lags : [1, 7]}
+                                    onChange={(lags) => updateModelParams(model.id, { lags })}
+                                    placeholder="Type a lag and press Enter (e.g., 1, 7, 14)"
                                   />
-                                  <p className="text-[10px] text-slate-500 mt-1">Comma separated lag periods (e.g., 1, 7, 14)</p>
+                                  <p className="text-[10px] text-slate-500 mt-1">Press Enter to add a lag period</p>
                                 </div>
                                 
                                 {/* Target Mode */}
                                 <div>
                                   <label className="text-xs text-slate-400 mb-2 block">Target Mode</label>
-                                  <select
+                                  <SegmentedControl
                                     value={(model.params as LinearRegressionParams).target_mode ?? 'raw'}
-                                    onChange={(e) => updateModelParams(model.id, { target_mode: e.target.value as 'raw' | 'residual' })}
-                                    className="glass-input w-full p-2 rounded-lg text-sm bg-slate-900 text-white [&>option]:bg-slate-900 [&>option]:text-white"
-                                  >
-                                    <option value="raw">Raw (predict y)</option>
-                                    <option value="residual">Residual (predict y - y_lag)</option>
-                                  </select>
+                                    options={[
+                                      { value: 'raw', label: 'Raw (predict y)' },
+                                      { value: 'residual', label: 'Residual (y - y_lag)' }
+                                    ]}
+                                    onChange={(value) => updateModelParams(model.id, { target_mode: value as 'raw' | 'residual' })}
+                                  />
                                   <p className="text-[10px] text-slate-500 mt-1">Raw = predict target directly, Residual = predict difference</p>
                                 </div>
                                 
@@ -1085,15 +1277,17 @@ export default function ForecastingPage() {
                                   <label className="text-xs text-slate-400 mb-2 block">
                                     Residual Lag {(model.params as LinearRegressionParams).target_mode === 'residual' ? '' : '(disabled)'}
                                   </label>
-                                  <input 
-                                    type="number" 
-                                    min="1"
-                                    value={(model.params as LinearRegressionParams).residual_lag ?? 1}
-                                    onChange={(e) => updateModelParams(model.id, { residual_lag: parseInt(e.target.value) || 1 })}
-                                    disabled={(model.params as LinearRegressionParams).target_mode !== 'residual'}
-                                    className="glass-input w-full p-2 rounded-lg text-sm disabled:opacity-40 disabled:cursor-not-allowed" 
-                                  />
-                                  <p className="text-[10px] text-slate-500 mt-1">Which lag to subtract (e.g., 1 = y - y_{'{t-1}'})</p>
+                                  {(model.params as LinearRegressionParams).target_mode === 'residual' ? (
+                                    <SingleNumberInput
+                                      value={(model.params as LinearRegressionParams).residual_lag ?? 1}
+                                      min={0}
+                                      onChange={(value) => updateModelParams(model.id, { residual_lag: value })}
+                                      placeholder="1"
+                                    />
+                                  ) : (
+                                    <div className="glass-input w-full p-2 rounded-lg text-sm opacity-40 text-slate-600 text-center">Disabled</div>
+                                  )}
+                                  <p className="text-[10px] text-slate-500 mt-1">Which lag to subtract (e.g., 1 = y - y_t-1)</p>
                                 </div>
                                 
                                 {/* Standardize */}
@@ -1130,31 +1324,25 @@ export default function ForecastingPage() {
                                 {/* Target Lags */}
                                 <div className="col-span-2">
                                   <label className="text-xs text-slate-400 mb-2 block">Target Lags</label>
-                                  <input 
-                                    type="text" 
-                                    defaultValue={params.lags?.join(', ') ?? '1, 7, 14, 30'}
-                                    onBlur={(e) => {
-                                      const lags = parseLagsString(e.target.value);
-                                      if (lags.length > 0) {
-                                        updateModelParams(model.id, { lags } as any);
-                                      }
-                                    }}
-                                    className="glass-input w-full p-2 rounded-lg text-sm" 
+                                  <TagInput
+                                    values={params.lags ?? [1, 7, 14, 30]}
+                                    onChange={(lags) => updateModelParams(model.id, { lags } as any)}
+                                    placeholder="Type a lag and press Enter (e.g., 1, 7, 14)"
                                   />
-                                  <p className="text-[10px] text-slate-500 mt-1">Comma separated lag periods (e.g., 1, 7, 14)</p>
+                                  <p className="text-[10px] text-slate-500 mt-1">Press Enter to add a lag period</p>
                                 </div>
                                 
                                 {/* Target Mode */}
                                 <div>
                                   <label className="text-xs text-slate-400 mb-2 block">Target Mode</label>
-                                  <select
+                                  <SegmentedControl
                                     value={params.target_mode ?? 'raw'}
-                                    onChange={(e) => updateModelParams(model.id, { target_mode: e.target.value } as any)}
-                                    className="glass-input w-full p-2 rounded-lg text-sm bg-slate-900 text-white [&>option]:bg-slate-900 [&>option]:text-white"
-                                  >
-                                    <option value="raw">Raw (predict y)</option>
-                                    <option value="residual">Residual (predict y - y_lag)</option>
-                                  </select>
+                                    options={[
+                                      { value: 'raw', label: 'Raw (predict y)' },
+                                      { value: 'residual', label: 'Residual (y - y_lag)' }
+                                    ]}
+                                    onChange={(value) => updateModelParams(model.id, { target_mode: value } as any)}
+                                  />
                                   <p className="text-[10px] text-slate-500 mt-1">Raw = predict target directly, Residual = predict difference</p>
                                 </div>
                                 
@@ -1163,51 +1351,67 @@ export default function ForecastingPage() {
                                   <label className="text-xs text-slate-400 mb-2 block">
                                     Residual Lag {params.target_mode === 'residual' ? '' : '(disabled)'}
                                   </label>
-                                  <input 
-                                    type="number" 
-                                    min="1"
-                                    value={params.residual_lag ?? 1}
-                                    onChange={(e) => updateModelParams(model.id, { residual_lag: parseInt(e.target.value) || 1 } as any)}
-                                    disabled={params.target_mode !== 'residual'}
-                                    className="glass-input w-full p-2 rounded-lg text-sm disabled:opacity-40 disabled:cursor-not-allowed" 
-                                  />
+                                  {params.target_mode === 'residual' ? (
+                                    <SingleNumberInput
+                                      value={params.residual_lag ?? 1}
+                                      min={0}
+                                      onChange={(value) => updateModelParams(model.id, { residual_lag: value } as any)}
+                                      placeholder="1"
+                                    />
+                                  ) : (
+                                    <div className="glass-input w-full p-2 rounded-lg text-sm opacity-40 text-slate-600 text-center">Disabled</div>
+                                  )}
                                   <p className="text-[10px] text-slate-500 mt-1">Which lag to subtract</p>
                                 </div>
                                 
                                 {/* XGBoost Specific Params */}
                                 <div>
-                                  <label className="text-xs text-slate-400 mb-2 block">N Estimators</label>
-                                  <input 
-                                    type="number" 
-                                    defaultValue={params.n_estimators ?? 100}
+                                  <Slider
+                                    value={params.n_estimators ?? 100}
                                     min={10}
                                     max={1000}
-                                    onBlur={(e) => updateModelParams(model.id, { n_estimators: parseInt(e.target.value) || 100 } as any)}
-                                    className="glass-input w-full p-2 rounded-lg text-sm" 
+                                    step={10}
+                                    onChange={(value) => updateModelParams(model.id, { n_estimators: value } as any)}
+                                    label="N Estimators (trees in ensemble)"
                                   />
                                 </div>
                                 <div>
-                                  <label className="text-xs text-slate-400 mb-2 block">Max Depth</label>
-                                  <input 
-                                    type="number" 
-                                    defaultValue={params.max_depth ?? 6}
+                                  <Slider
+                                    value={params.max_depth ?? 6}
                                     min={1}
                                     max={20}
-                                    onBlur={(e) => updateModelParams(model.id, { max_depth: parseInt(e.target.value) || 6 } as any)}
-                                    className="glass-input w-full p-2 rounded-lg text-sm" 
+                                    step={1}
+                                    onChange={(value) => updateModelParams(model.id, { max_depth: value } as any)}
+                                    label="Max Depth (tree complexity)"
                                   />
                                 </div>
                                 <div>
                                   <label className="text-xs text-slate-400 mb-2 block">Learning Rate</label>
-                                  <input 
-                                    type="number" 
-                                    step={0.01}
-                                    defaultValue={params.learning_rate ?? 0.1}
-                                    min={0.01}
-                                    max={1}
-                                    onBlur={(e) => updateModelParams(model.id, { learning_rate: parseFloat(e.target.value) || 0.1 } as any)}
-                                    className="glass-input w-full p-2 rounded-lg text-sm" 
-                                  />
+                                  <div className="flex gap-2">
+                                    <input 
+                                      type="text" 
+                                      inputMode="decimal"
+                                      value={params.learning_rate ?? 0.1}
+                                      onChange={(e) => {
+                                        const val = parseFloat(e.target.value);
+                                        if (!isNaN(val) && val > 0 && val <= 1) {
+                                          updateModelParams(model.id, { learning_rate: val } as any);
+                                        }
+                                      }}
+                                      className="glass-input flex-1 p-2 rounded-lg text-sm" 
+                                    />
+                                    <select
+                                      value=""
+                                      onChange={(e) => e.target.value && updateModelParams(model.id, { learning_rate: parseFloat(e.target.value) } as any)}
+                                      className="glass-input px-2 rounded-lg text-xs bg-slate-900 text-white [&>option]:bg-slate-900 [&>option]:text-white"
+                                    >
+                                      <option value="">Presets</option>
+                                      <option value="0.001">0.001 (slow)</option>
+                                      <option value="0.01">0.01 (medium)</option>
+                                      <option value="0.1">0.1 (fast)</option>
+                                      <option value="0.3">0.3 (aggressive)</option>
+                                    </select>
+                                  </div>
                                 </div>
                                 
                                 {/* Feature Configuration Panel */}
@@ -1227,36 +1431,33 @@ export default function ForecastingPage() {
                               return (
                               <>
                                 <div>
-                                  <label className="text-xs text-slate-400 mb-2 block">P (Auto-regressive)</label>
-                                  <input 
-                                    type="number" 
-                                    defaultValue={params.p ?? 1}
+                                  <Slider
+                                    value={params.p ?? 1}
                                     min={0}
                                     max={10}
-                                    onBlur={(e) => updateModelParams(model.id, { p: parseInt(e.target.value) || 1 } as any)}
-                                    className="glass-input w-full p-2 rounded-lg text-sm" 
+                                    step={1}
+                                    onChange={(value) => updateModelParams(model.id, { p: value } as any)}
+                                    label="P (Auto-regressive order)"
                                   />
                                 </div>
                                 <div>
-                                  <label className="text-xs text-slate-400 mb-2 block">D (Differencing)</label>
-                                  <input 
-                                    type="number" 
-                                    defaultValue={params.d ?? 1}
+                                  <Slider
+                                    value={params.d ?? 1}
                                     min={0}
                                     max={3}
-                                    onBlur={(e) => updateModelParams(model.id, { d: parseInt(e.target.value) || 1 } as any)}
-                                    className="glass-input w-full p-2 rounded-lg text-sm" 
+                                    step={1}
+                                    onChange={(value) => updateModelParams(model.id, { d: value } as any)}
+                                    label="D (Differencing order)"
                                   />
                                 </div>
                                 <div>
-                                  <label className="text-xs text-slate-400 mb-2 block">Q (Moving Avg)</label>
-                                  <input 
-                                    type="number" 
-                                    defaultValue={params.q ?? 1}
+                                  <Slider
+                                    value={params.q ?? 1}
                                     min={0}
                                     max={10}
-                                    onBlur={(e) => updateModelParams(model.id, { q: parseInt(e.target.value) || 1 } as any)}
-                                    className="glass-input w-full p-2 rounded-lg text-sm" 
+                                    step={1}
+                                    onChange={(value) => updateModelParams(model.id, { q: value } as any)}
+                                    label="Q (Moving average order)"
                                   />
                                 </div>
                                 <div className="col-span-2 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
@@ -1287,18 +1488,15 @@ export default function ForecastingPage() {
                                       <span className="text-xs text-slate-300">Enable</span>
                                     </label>
                                   </div>
-                                  <input 
-                                    type="text" 
-                                    defaultValue={params.lag_regressors?.join(', ') ?? '1, 7'}
-                                    disabled={!(params.use_lag_regressors ?? true)}
-                                    onBlur={(e) => {
-                                      const lags = e.target.value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n > 0);
-                                      if (lags.length > 0) {
-                                        updateModelParams(model.id, { lag_regressors: lags } as any);
-                                      }
-                                    }}
-                                    className="glass-input w-full p-2 rounded-lg text-sm disabled:opacity-40" 
-                                  />
+                                  {params.use_lag_regressors !== false ? (
+                                    <TagInput
+                                      values={params.lag_regressors ?? [1, 7]}
+                                      onChange={(lags) => updateModelParams(model.id, { lag_regressors: lags } as any)}
+                                      placeholder="Type a lag and press Enter (e.g., 1, 7, 14)"
+                                    />
+                                  ) : (
+                                    <div className="glass-input w-full p-2 rounded-lg text-sm opacity-40 text-slate-600">Disabled</div>
+                                  )}
                                   <p className="text-[10px] text-slate-500 mt-1">Past values to use as regressors (e.g., 1 = yesterday, 7 = last week)</p>
                                 </div>
                                 
@@ -1338,14 +1536,15 @@ export default function ForecastingPage() {
                                 
                                 <div>
                                   <label className="text-xs text-slate-400 mb-2 block">Seasonality Mode</label>
-                                  <select 
+                                  <SegmentedControl
                                     value={params.seasonality_mode ?? 'additive'}
-                                    onChange={(e) => updateModelParams(model.id, { seasonality_mode: e.target.value } as any)}
-                                    className="glass-input w-full p-2 rounded-lg text-sm bg-slate-900 text-white [&>option]:bg-slate-900 [&>option]:text-white"
-                                  >
-                                    <option value="additive">Additive</option>
-                                    <option value="multiplicative">Multiplicative</option>
-                                  </select>
+                                    options={[
+                                      { value: 'additive', label: 'Additive' },
+                                      { value: 'multiplicative', label: 'Multiplicative' }
+                                    ]}
+                                    onChange={(value) => updateModelParams(model.id, { seasonality_mode: value } as any)}
+                                  />
+                                  <p className="text-[10px] text-slate-500 mt-1">Use multiplicative for data where seasonal effects grow with trend</p>
                                 </div>
                                 
                                 <div className="col-span-2 p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg">
