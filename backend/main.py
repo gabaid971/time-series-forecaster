@@ -3,7 +3,9 @@ Time Series Forecaster Backend
 Simple, readable API with Polars + scikit-learn
 """
 
-from fastapi import FastAPI, HTTPException
+import os
+import secrets
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -24,6 +26,12 @@ try:
 except ImportError:
     PROPHET_AVAILABLE = False
     print("⚠️ Prophet not installed. Prophet model will be unavailable.")
+
+API_KEY = os.environ.get("API_KEY", "")
+
+def verify_api_key(x_api_key: str = Header(...)):
+    if not secrets.compare_digest(x_api_key, API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid API Key")
 
 # ============================================================================
 # SCHEMAS (Pydantic models for API request/response)
@@ -1153,7 +1161,7 @@ async def health():
     return {"status": "healthy"}
 
 @app.post("/analyze", response_model=DatasetAnalysisResponse)
-async def analyze_dataset(request: DatasetAnalysisRequest):
+async def analyze_dataset(request: DatasetAnalysisRequest, _: None = Depends(verify_api_key)):
     """
     Analyze a dataset and return statistics.
     Auto-detects frequency, missing values, date range, etc.
@@ -1278,7 +1286,7 @@ async def analyze_dataset(request: DatasetAnalysisRequest):
 
 
 @app.post("/train", response_model=TrainingResponse)
-async def train_models(request: TrainingRequest):
+async def train_models(request: TrainingRequest, _: None = Depends(verify_api_key)):
     """
     Main training endpoint.
     Receives data + config, trains requested models, returns predictions + metrics.

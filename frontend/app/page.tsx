@@ -8,12 +8,12 @@ import TimeSeriesChart from '../components/TimeSeriesChart';
 
 // API URL - uses environment variable in production, localhost in development
 // Remove trailing slash to avoid double slashes in URLs
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+// const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 
 // Debug: log API URL (check browser console)
-if (typeof window !== 'undefined') {
-  console.log('🔗 API_URL:', API_URL);
-}
+// if (typeof window !== 'undefined') {
+//   console.log('🔗 API_URL:', API_URL);
+// }
 
 // Tag Input Component for entering multiple integer values
 const TagInput = ({ values, onChange, placeholder }: { values: number[], onChange: (values: number[]) => void, placeholder?: string }) => {
@@ -565,7 +565,7 @@ export default function ForecastingPage() {
         models: selectedModels
       };
 
-      const response = await fetch(`${API_URL}/train`, {
+      const response = await fetch(`/api/train`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -661,7 +661,7 @@ export default function ForecastingPage() {
     
     setIsAnalyzing(true);
     try {
-      const response = await fetch(`${API_URL}/analyze`, {
+      const response = await fetch(`/api/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
