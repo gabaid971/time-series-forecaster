@@ -6,14 +6,39 @@ import { Upload, Activity, BarChart3, Settings, Play, Plus, X, ChevronRight, Fil
 import Papa from 'papaparse';
 import TimeSeriesChart from '../components/TimeSeriesChart';
 
-// API URL - uses environment variable in production, localhost in development
-// Remove trailing slash to avoid double slashes in URLs
-// const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+// ============================================================================
+// API CONFIGURATION
+// ============================================================================
+// Mode: 'direct' = appel direct au backend (contourne limite Vercel, clé exposée)
+//       'proxy'  = passe par /api routes Vercel (clé cachée, limite 4.5MB)
+const API_MODE = (process.env.NEXT_PUBLIC_API_MODE || 'direct') as 'direct' | 'proxy';
 
-// Debug: log API URL (check browser console)
-// if (typeof window !== 'undefined') {
-//   console.log('🔗 API_URL:', API_URL);
-// }
+// URLs et clé API
+const BACKEND_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || '';
+
+// Helper pour construire l'URL selon le mode
+const getApiUrl = (endpoint: string) => {
+  if (API_MODE === 'proxy') {
+    return `/api/${endpoint}`;
+  }
+  return `${BACKEND_URL}/${endpoint}`;
+};
+
+// Helper pour construire les headers selon le mode
+const getApiHeaders = (): HeadersInit => {
+  const headers: HeadersInit = { 'Content-Type': 'application/json' };
+  if (API_MODE === 'direct' && API_KEY) {
+    headers['X-API-Key'] = API_KEY;
+  }
+  return headers;
+};
+
+// Debug: log API config (check browser console)
+if (typeof window !== 'undefined') {
+  console.log('🔗 API Mode:', API_MODE);
+  console.log('🔗 Backend URL:', BACKEND_URL);
+}
 
 // Tag Input Component for entering multiple integer values
 const TagInput = ({ values, onChange, placeholder }: { values: number[], onChange: (values: number[]) => void, placeholder?: string }) => {
@@ -565,11 +590,9 @@ export default function ForecastingPage() {
         models: selectedModels
       };
 
-      const response = await fetch(`/api/train`, {
+      const response = await fetch(getApiUrl('train'), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getApiHeaders(),
         body: JSON.stringify(payload),
       });
 
@@ -661,9 +684,9 @@ export default function ForecastingPage() {
     
     setIsAnalyzing(true);
     try {
-      const response = await fetch(`/api/analyze`, {
+      const response = await fetch(getApiUrl('analyze'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getApiHeaders(),
         body: JSON.stringify({
           data: rawData,
           date_column: data.dateColumn,

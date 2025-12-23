@@ -159,12 +159,20 @@ class FeatureConfig(BaseModel):
 
 app = FastAPI(title="Time Series Forecaster API", version="1.0.0")
 
+# CORS : origines autorisées (séparées par virgule dans la variable d'environnement)
+# Ex: ALLOWED_ORIGINS="https://time-series-forecaster.vercel.app,http://localhost:3000"
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "*")
+if allowed_origins_env == "*":
+    allowed_origins = ["*"]
+else:
+    allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
 
 # ============================================================================
