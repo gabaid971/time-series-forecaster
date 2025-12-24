@@ -10,4 +10,4 @@ statsmodels
 
 # Optional: Prophet (heavy, ~1GB with dependencies)
 # Uncomment to enable Prophet model:
-# prophet
+prophet

@@ -1410,7 +1410,7 @@ export default function ForecastingPage() {
                                 </div>
                                 <div>
                                   <label className="text-xs text-slate-400 mb-2 block">Learning Rate</label>
-                                  <div className="flex gap-2">
+                                  <div className="flex flex-col sm:flex-row gap-2">
                                     <input 
                                       type="text" 
                                       inputMode="decimal"
