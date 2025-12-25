@@ -156,12 +156,42 @@ export interface FeatureImportance {
   importance: number;
 }
 
+// SHAP value for a specific temporal value (e.g., Monday = 0, January = 1)
+export interface ShapValue {
+  value: number;        // The temporal value (0-6 for day_of_week, 1-12 for month, etc.)
+  shap: number;         // Raw SHAP value
+  count: number;        // Number of samples with this value
+  shap_norm: number;    // Normalized SHAP value (-1 to 1)
+}
+
+// SHAP analysis for exogenous features
+export interface ExogenousShap {
+  mean_abs_shap: number;
+  mean_shap: number;
+  direction: 'positive' | 'negative' | 'neutral';
+  features: string[];
+}
+
+// Complete SHAP analysis structure from XGBoost
+export interface ShapAnalysis {
+  temporal: {
+    hour_of_day?: ShapValue[];
+    day_of_week?: ShapValue[];
+    month?: ShapValue[];
+    minute_of_day?: ShapValue[];
+  };
+  exogenous: {
+    [key: string]: ExogenousShap;
+  };
+}
+
 export interface ModelResult {
   model_id: string;
   model_name: string;
   metrics: ModelMetrics;
   forecast: ForecastPoint[];
   feature_importance?: FeatureImportance[];
+  shap_analysis?: ShapAnalysis;  // SHAP analysis for XGBoost models
   error?: string;  // Error message if model training failed
 }
 

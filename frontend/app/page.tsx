@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { ModelConfig, ModelType, TimeSeriesData, ModelResult, DateRange, LinearRegressionParams, ColumnInfo, FeatureConfig, TemporalFeatureConfig, ExogenousFeatureConfig, DerivedFeatureConfig } from '../types/forecasting';
-import { Upload, Activity, BarChart3, Settings, Play, Plus, X, ChevronRight, FileText, CheckCircle2, Trophy, Timer, Download, Trash2, LineChart, Network, Target, Calculator, Split, Percent } from 'lucide-react';
+import { ModelConfig, ModelType, TimeSeriesData, ModelResult, DateRange, LinearRegressionParams, ColumnInfo, FeatureConfig, TemporalFeatureConfig, ExogenousFeatureConfig, DerivedFeatureConfig, ShapAnalysis, ShapValue } from '../types/forecasting';
+import { Upload, Activity, BarChart3, Settings, Play, Plus, X, ChevronRight, FileText, CheckCircle2, Trophy, Timer, Download, Trash2, LineChart, Network, Target, Calculator, Split, Percent, TrendingUp, TrendingDown, Info } from 'lucide-react';
 import Papa from 'papaparse';
 import TimeSeriesChart from '../components/TimeSeriesChart';
 
@@ -237,6 +237,192 @@ const SingleNumberInput = ({ value, onChange, min = 0, placeholder }: {
       className="glass-input w-full p-2 rounded-lg text-sm text-white"
     />
   );
+};
+
+// SHAP Chart Component for visualizing SHAP values by temporal feature
+const ShapChart = ({ 
+  shapValues, 
+  featureName, 
+  onClose 
+}: { 
+  shapValues: ShapValue[], 
+  featureName: string, 
+  onClose: () => void 
+}) => {
+  const [useNormalized, setUseNormalized] = useState(true);
+
+  // Get display labels for the feature values
+  const getLabel = (value: number): string => {
+    switch (featureName) {
+      case 'day_of_week':
+        return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][value] || String(value);
+      case 'month':
+        return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][value - 1] || String(value);
+      case 'hour_of_day':
+        return `${value}h`;
+      case 'minute_of_day':
+        const h = Math.floor(value / 60);
+        const m = value % 60;
+        return `${h}:${String(m).padStart(2, '0')}`;
+      default:
+        return String(value);
+    }
+  };
+
+  // Get readable feature name
+  const getFeatureTitle = (): string => {
+    switch (featureName) {
+      case 'day_of_week': return 'Day of week';
+      case 'month': return 'Month';
+      case 'hour_of_day': return 'Hour of day';
+      case 'minute_of_day': return 'Minute of day';
+      default: return featureName;
+    }
+  };
+
+  const values = shapValues.map(v => useNormalized ? v.shap_norm : v.shap);
+  const maxAbsValue = Math.max(...values.map(v => Math.abs(v)), 0.001);
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div 
+        className="bg-slate-900 border border-white/10 rounded-xl max-w-2xl w-full max-h-[80vh] overflow-hidden shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="p-4 border-b border-white/10 flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-white">SHAP Values: {getFeatureTitle()}</h3>
+            <p className="text-xs text-slate-400 mt-1">Impact of each value on the prediction</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 bg-black/30 rounded-lg p-1">
+              <button
+                onClick={() => setUseNormalized(true)}
+                className={`px-3 py-1 text-xs rounded transition-all ${useNormalized ? 'bg-amber-500 text-black' : 'text-slate-400'}`}
+              >
+                Normalized
+              </button>
+              <button
+                onClick={() => setUseNormalized(false)}
+                className={`px-3 py-1 text-xs rounded transition-all ${!useNormalized ? 'bg-amber-500 text-black' : 'text-slate-400'}`}
+              >
+                Raw
+              </button>
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-white">
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+        
+        {/* Chart */}
+        <div className="p-4 overflow-auto max-h-[60vh]">
+          <div className="space-y-2">
+            {shapValues.map((sv) => {
+              const val = useNormalized ? sv.shap_norm : sv.shap;
+              const isPositive = val >= 0;
+              const barWidth = (Math.abs(val) / maxAbsValue) * 50;
+              
+              return (
+                <div key={sv.value} className="flex items-center gap-2 h-8">
+                  {/* Label */}
+                  <span className="text-xs text-slate-400 w-12 text-right font-medium">
+                    {getLabel(sv.value)}
+                  </span>
+                  
+                  {/* Bar container (centered) */}
+                  <div className="flex-1 flex items-center">
+                    {/* Left side (negative values) */}
+                    <div className="w-1/2 flex justify-end">
+                      {!isPositive && (
+                        <div 
+                          className="h-6 bg-red-500/80 rounded-l"
+                          style={{ width: `${barWidth}%` }}
+                        />
+                      )}
+                    </div>
+                    
+                    {/* Center line */}
+                    <div className="w-px h-8 bg-white/20" />
+                    
+                    {/* Right side (positive values) */}
+                    <div className="w-1/2">
+                      {isPositive && (
+                        <div 
+                          className="h-6 bg-emerald-500/80 rounded-r"
+                          style={{ width: `${barWidth}%` }}
+                        />
+                      )}
+                    </div>
+                  </div>
+                  
+                  {/* Value */}
+                  <span className={`text-xs font-mono w-16 text-right ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {val >= 0 ? '+' : ''}{val.toFixed(3)}
+                  </span>
+                  
+                  {/* Count */}
+                  <span className="text-[10px] text-slate-600 w-10 text-right">
+                    n={sv.count}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        
+        {/* Legend */}
+        <div className="p-3 border-t border-white/10 bg-black/20">
+          <div className="flex items-center justify-center gap-6 text-xs text-slate-400">
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-3 bg-red-500/80 rounded" />
+              Negative impact
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-3 bg-emerald-500/80 rounded" />
+              Positive impact
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Feature name formatter for cleaner display
+const formatFeatureName = (feature: string): string => {
+  // Handle lag features
+  if (feature.match(/^target_lag_\d+$/)) {
+    return feature.replace('target_lag_', 'Lag ');
+  }
+  if (feature.match(/_lag_\d+$/)) {
+    return feature.replace(/_lag_(\d+)$/, ' (t-$1)');
+  }
+  // Handle temporal features
+  const temporalMap: Record<string, string> = {
+    'dow_sin': 'Day of week (sin)',
+    'dow_cos': 'Day of week (cos)',
+    'month_sin': 'Month (sin)',
+    'month_cos': 'Month (cos)',
+    'hour_sin': 'Hour (sin)',
+    'hour_cos': 'Hour (cos)',
+    'minute_of_day_sin': 'Minute (sin)',
+    'minute_of_day_cos': 'Minute (cos)',
+    'day_of_month': 'Day of month',
+    'week_of_year': 'Week',
+    'year': 'Year',
+  };
+  return temporalMap[feature] || feature;
+};
+
+// Check if a feature has associated SHAP values
+const getShapKeyForFeature = (feature: string): string | null => {
+  if (feature.includes('dow_') || feature === 'day_of_week') return 'day_of_week';
+  if (feature.includes('month_') && !feature.includes('day_of_month')) return 'month';
+  if (feature.includes('hour_')) return 'hour_of_day';
+  if (feature.includes('minute_of_day')) return 'minute_of_day';
+  return null;
 };
 
 const FeatureConfigPanel = ({ model, updateModelParams, availableColumns }: { model: ModelConfig, updateModelParams: Function, availableColumns: ColumnInfo[] }) => {
@@ -534,6 +720,13 @@ export default function ForecastingPage() {
   // Results State
   const [isTraining, setIsTraining] = useState(false);
   const [results, setResults] = useState<ModelResult[]>([]);
+  
+  // SHAP Modal State
+  const [shapModal, setShapModal] = useState<{ 
+    isOpen: boolean; 
+    shapValues: ShapValue[]; 
+    featureName: string; 
+  }>({ isOpen: false, shapValues: [], featureName: '' });
 
   // Raw data from CSV (before backend normalization)
   const [rawData, setRawData] = useState<any[]>([]);
@@ -1782,36 +1975,152 @@ export default function ForecastingPage() {
                     {results.some(r => r.feature_importance && r.feature_importance.length > 0) && (
                       <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
                         <div className="p-4 border-b border-white/10">
-                          <h3 className="font-semibold text-white">Feature Importance</h3>
+                          <h3 className="font-semibold text-white flex items-center gap-2">
+                            <BarChart3 size={16} className="text-amber-500" />
+                            Feature Importance
+                          </h3>
                         </div>
-                        <div className="p-4 space-y-4">
-                          {results.filter(r => r.feature_importance && r.feature_importance.length > 0).map(res => (
-                            <div key={res.model_id} className="space-y-2">
-                              <h4 className="text-sm font-medium text-slate-300">{res.model_name}</h4>
-                              <div className="space-y-2">
-                                {res.feature_importance?.map((fi, idx) => {
-                                  const maxImportance = Math.max(...(res.feature_importance?.map(f => f.importance) || [1]));
-                                  const widthPercent = (fi.importance / maxImportance) * 100;
-                                  return (
-                                    <div key={fi.feature} className="flex items-center gap-3">
-                                      <span className="text-xs text-slate-400 w-20 truncate">{fi.feature}</span>
-                                      <div className="flex-1 bg-black/30 rounded-full h-4 overflow-hidden">
-                                        <div 
-                                          className={`h-full rounded-full ${idx === 0 ? 'bg-amber-500' : 'bg-slate-500'}`}
-                                          style={{ width: `${widthPercent}%` }}
-                                        />
-                                      </div>
-                                      <span className="text-xs font-mono text-slate-300 w-16 text-right">
-                                        {fi.importance.toFixed(3)}
+                        <div className="p-4 space-y-6">
+                          {results.filter(r => r.feature_importance && r.feature_importance.length > 0).map(res => {
+                            const maxImportance = Math.max(...(res.feature_importance?.map(f => f.importance) || [1]));
+                            const hasShapAnalysis = res.shap_analysis && Object.keys(res.shap_analysis.temporal).length > 0;
+                            
+                            return (
+                              <div key={res.model_id} className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <h4 className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                                    {res.model_name}
+                                    {hasShapAnalysis && (
+                                      <span className="px-2 py-0.5 text-[10px] bg-amber-500/20 text-amber-400 rounded-full">
+                                        SHAP
                                       </span>
+                                    )}
+                                  </h4>
+                                </div>
+                                
+                                <div className="space-y-1.5">
+                                  {res.feature_importance?.slice(0, 12).map((fi, idx) => {
+                                    const widthPercent = (fi.importance / maxImportance) * 100;
+                                    const shapKey = hasShapAnalysis ? getShapKeyForFeature(fi.feature) : null;
+                                    const shapData = shapKey && res.shap_analysis?.temporal 
+                                      ? res.shap_analysis.temporal[shapKey as keyof typeof res.shap_analysis.temporal] 
+                                      : null;
+                                    
+                                    return (
+                                      <div key={fi.feature} className="group flex items-center gap-2">
+                                        {/* Feature name with tooltip */}
+                                        <div className="flex items-center gap-1.5 w-28 sm:w-36">
+                                          <span 
+                                            className="text-xs text-slate-400 truncate" 
+                                            title={fi.feature}
+                                          >
+                                            {formatFeatureName(fi.feature)}
+                                          </span>
+                                          {shapData && shapKey && (
+                                            <button
+                                              onClick={() => {
+                                                setShapModal({
+                                                  isOpen: true,
+                                                  shapValues: shapData,
+                                                  featureName: shapKey
+                                                });
+                                              }}
+                                              className="p-0.5 text-amber-500/60 hover:text-amber-400 transition-colors"
+                                              title="Voir les valeurs SHAP"
+                                            >
+                                              <Info size={12} />
+                                            </button>
+                                          )}
+                                        </div>
+                                        
+                                        {/* Bar */}
+                                        <div className="flex-1 bg-black/30 rounded h-5 overflow-hidden">
+                                          <div 
+                                            className={`h-full rounded transition-all ${
+                                              idx === 0 ? 'bg-gradient-to-r from-amber-500 to-amber-400' : 
+                                              idx < 3 ? 'bg-amber-500/60' : 'bg-slate-600'
+                                            }`}
+                                            style={{ width: `${widthPercent}%` }}
+                                          />
+                                        </div>
+                                        
+                                        {/* Value */}
+                                        <span className="text-xs font-mono text-slate-400 w-14 text-right">
+                                          {(fi.importance * 100).toFixed(1)}%
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                  
+                                  {/* Show more indicator */}
+                                  {(res.feature_importance?.length || 0) > 12 && (
+                                    <p className="text-xs text-slate-600 text-center pt-2">
+                                      + {(res.feature_importance?.length || 0) - 12} autres features
+                                    </p>
+                                  )}
+                                </div>
+                                
+                                {/* SHAP Temporal Summary (if available) */}
+                                {hasShapAnalysis && (
+                                  <div className="mt-4 pt-3 border-t border-white/5">
+                                    <p className="text-xs text-slate-500 mb-2 flex items-center gap-1.5">
+                                      <TrendingUp size={12} />
+                                      Cliquez sur <Info size={10} className="inline text-amber-500" /> pour explorer l&apos;impact temporel
+                                    </p>
+                                    <div className="flex flex-wrap gap-2">
+                                      {Object.entries(res.shap_analysis!.temporal).map(([key, values]) => {
+                                        const featureLabels: Record<string, string> = {
+                                          day_of_week: 'Jour',
+                                          month: 'Mois',
+                                          hour_of_day: 'Heure',
+                                          minute_of_day: 'Minute'
+                                        };
+                                        const positiveCount = (values as ShapValue[]).filter(v => v.shap_norm > 0.3).length;
+                                        const negativeCount = (values as ShapValue[]).filter(v => v.shap_norm < -0.3).length;
+                                        
+                                        return (
+                                          <button
+                                            key={key}
+                                            onClick={() => setShapModal({
+                                              isOpen: true,
+                                              shapValues: values as ShapValue[],
+                                              featureName: key
+                                            })}
+                                            className="flex items-center gap-2 px-3 py-1.5 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-amber-500/30 rounded-lg transition-all text-xs"
+                                          >
+                                            <span className="text-slate-300">{featureLabels[key] || key}</span>
+                                            <span className="flex items-center gap-1 text-[10px]">
+                                              {positiveCount > 0 && (
+                                                <span className="text-emerald-400 flex items-center">
+                                                  <TrendingUp size={10} />{positiveCount}
+                                                </span>
+                                              )}
+                                              {negativeCount > 0 && (
+                                                <span className="text-red-400 flex items-center">
+                                                  <TrendingDown size={10} />{negativeCount}
+                                                </span>
+                                              )}
+                                            </span>
+                                          </button>
+                                        );
+                                      })}
                                     </div>
-                                  );
-                                })}
+                                  </div>
+                                )}
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
+                    )}
+                    
+                    {/* SHAP Modal */}
+                    {shapModal.isOpen && (
+                      <ShapChart
+                        shapValues={shapModal.shapValues}
+                        featureName={shapModal.featureName}
+                        onClose={() => setShapModal({ isOpen: false, shapValues: [], featureName: '' })}
+                      />
                     )}
 
                     <div className="flex justify-end pt-4">
