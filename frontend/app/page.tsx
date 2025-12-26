@@ -727,6 +727,9 @@ export default function ForecastingPage() {
     shapValues: ShapValue[]; 
     featureName: string; 
   }>({ isOpen: false, shapValues: [], featureName: '' });
+  
+  // Delta mode for forecast visualization
+  const [isDeltaMode, setIsDeltaMode] = useState(false);
 
   // Raw data from CSV (before backend normalization)
   const [rawData, setRawData] = useState<any[]>([]);
@@ -1844,24 +1847,56 @@ export default function ForecastingPage() {
                     {/* Prediction Visualization */}
                     {results.length > 0 && data && (
                       <div className="bg-white/5 border border-white/10 rounded-xl p-3 sm:p-4">
-                        <div className="flex justify-between items-center mb-3 sm:mb-4">
+                        <div className="flex justify-between items-center mb-3 sm:mb-4 gap-2">
                           <h3 className="font-semibold text-sm sm:text-base text-white">Forecast Visualization</h3>
-                          <button 
-                            onClick={exportForecastsToCSV}
-                            className="text-xs flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 hover:text-amber-300 border border-amber-500/20 transition-all"
-                          >
-                            <Download size={14} /> Export CSV
-                          </button>
+                          <div className="flex items-center gap-2">
+                            {/* Delta Mode Toggle */}
+                            <div className="flex items-center gap-1.5 bg-black/30 rounded-lg p-1 border border-white/10">
+                              <button
+                                onClick={() => setIsDeltaMode(false)}
+                                className={`px-2.5 py-1 text-[10px] sm:text-xs rounded transition-all ${
+                                  !isDeltaMode ? 'bg-amber-500 text-black font-medium' : 'text-slate-400 hover:text-slate-200'
+                                }`}
+                              >
+                                Values
+                              </button>
+                              <button
+                                onClick={() => setIsDeltaMode(true)}
+                                className={`px-2.5 py-1 text-[10px] sm:text-xs rounded transition-all ${
+                                  isDeltaMode ? 'bg-amber-500 text-black font-medium' : 'text-slate-400 hover:text-slate-200'
+                                }`}
+                              >
+                                Deltas
+                              </button>
+                            </div>
+                            <button 
+                              onClick={exportForecastsToCSV}
+                              className="text-xs flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 hover:text-amber-300 border border-amber-500/20 transition-all"
+                            >
+                              <Download size={14} /> <span className="hidden sm:inline">Export CSV</span>
+                            </button>
+                          </div>
                         </div>
                         <TimeSeriesChart 
-                          data={results[0].forecast} 
+                          data={isDeltaMode ? results[0].forecast.map(row => {
+                            // In delta mode, show zero line for actual
+                            const rowData = row as any;
+                            return { ...rowData, [data.targetColumn]: 0 };
+                          }) : results[0].forecast}
                           dateColumn={data.dateColumn} 
                           targetColumn={data.targetColumn}
                           predictions={results.filter(r => !r.error).map(r => ({
                             name: r.model_name,
-                            data: r.forecast
+                            data: isDeltaMode ? r.forecast.map(row => {
+                              // Calculate delta: prediction - actual
+                              const rowData = row as any;
+                              const actual = rowData[data.targetColumn] || 0;
+                              const pred = rowData['prediction'] !== undefined ? rowData['prediction'] : actual;
+                              const delta = pred - actual;
+                              return { ...rowData, prediction: delta };
+                            }) : r.forecast
                           }))}
-                          title="Model Comparison"
+                          title={isDeltaMode ? "Prediction Errors (Pred - Actual)" : "Model Comparison"}
                         />
                       </div>
                     )}
@@ -2055,7 +2090,7 @@ export default function ForecastingPage() {
                                   {/* Show more indicator */}
                                   {(res.feature_importance?.length || 0) > 12 && (
                                     <p className="text-xs text-slate-600 text-center pt-2">
-                                      + {(res.feature_importance?.length || 0) - 12} autres features
+                                      + {(res.feature_importance?.length || 0) - 12} more features
                                     </p>
                                   )}
                                 </div>
@@ -2065,14 +2100,14 @@ export default function ForecastingPage() {
                                   <div className="mt-4 pt-3 border-t border-white/5">
                                     <p className="text-xs text-slate-500 mb-2 flex items-center gap-1.5">
                                       <TrendingUp size={12} />
-                                      Cliquez sur <Info size={10} className="inline text-amber-500" /> pour explorer l&apos;impact temporel
+                                      Click on <Info size={10} className="inline text-amber-500" /> to explore temporal impact
                                     </p>
                                     <div className="flex flex-wrap gap-2">
                                       {Object.entries(res.shap_analysis!.temporal).map(([key, values]) => {
                                         const featureLabels: Record<string, string> = {
-                                          day_of_week: 'Jour',
-                                          month: 'Mois',
-                                          hour_of_day: 'Heure',
+                                          day_of_week: 'Day',
+                                          month: 'Month',
+                                          hour_of_day: 'Hour',
                                           minute_of_day: 'Minute'
                                         };
                                         const positiveCount = (values as ShapValue[]).filter(v => v.shap_norm > 0.3).length;
