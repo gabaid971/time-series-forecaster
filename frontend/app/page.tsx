@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { ModelConfig, ModelType, TimeSeriesData, ModelResult, DateRange, LinearRegressionParams, ColumnInfo, FeatureConfig, TemporalFeatureConfig, ExogenousFeatureConfig, DerivedFeatureConfig, ShapAnalysis, ShapValue } from '../types/forecasting';
-import { Upload, Activity, BarChart3, Settings, Play, Plus, X, ChevronRight, FileText, CheckCircle2, Trophy, Timer, Download, Trash2, LineChart, Network, Target, Calculator, Split, Percent, TrendingUp, TrendingDown, Info } from 'lucide-react';
+import { ModelConfig, ModelType, TimeSeriesData, ModelResult, DateRange, LinearRegressionParams, ColumnInfo, FeatureConfig, TemporalFeatureConfig, ExogenousFeatureConfig, DerivedFeatureConfig, ShapAnalysis, ShapValue, ForecastStrategyConfig } from '../types/forecasting';
+import { Upload, Activity, BarChart3, Settings, Play, Plus, X, ChevronRight, ChevronDown, FileText, CheckCircle2, Trophy, Timer, Download, Trash2, LineChart, Network, Target, Calculator, Split, Percent, TrendingUp, TrendingDown, Info } from 'lucide-react';
 import Papa from 'papaparse';
 import TimeSeriesChart from '../components/TimeSeriesChart';
+import StrategyStep from '../components/StrategyStep';
 
 // ============================================================================
 // API CONFIGURATION
@@ -636,6 +637,10 @@ export default function ForecastingPage() {
   const [trainingRanges, setTrainingRanges] = useState<DateRange[]>([]);
   const [predictionRanges, setPredictionRanges] = useState<DateRange[]>([]);
   
+  // Forecast Strategy State
+  const [forecastHorizon, setForecastHorizon] = useState<number>(1);
+  const [defaultLags, setDefaultLags] = useState<number[]>([1, 7]);
+  
   // Data State
   const [data, setData] = useState<TimeSeriesData | null>(null);
   const [previewData, setPreviewData] = useState<any[]>([]);
@@ -773,6 +778,14 @@ export default function ForecastingPage() {
     setIsTraining(true);
     
     try {
+      // Get min lag from models to determine forecast mode
+      const allLags: number[] = selectedModels.flatMap(m => {
+        const params = m.params as any;
+        return params.feature_config?.target_lags || params.lags || params.lag ? [params.lag] : [1];
+      });
+      const minLag = allLags.length > 0 ? Math.min(...allLags.filter(l => l > 0)) : 1;
+      const forecastMode = forecastHorizon <= minLag ? 'direct' : 'recursive';
+      
       // Use rawData for training (contains all columns including exogenous)
       const payload = {
         data: rawData,
@@ -781,7 +794,11 @@ export default function ForecastingPage() {
           date_column: data.dateColumn,
           frequency: data.frequency,
           training_ranges: trainingRanges,
-          prediction_ranges: predictionRanges
+          prediction_ranges: predictionRanges,
+          forecast_strategy: {
+            horizon: forecastHorizon,
+            mode: forecastMode
+          }
         },
         models: selectedModels
       };
@@ -957,11 +974,11 @@ export default function ForecastingPage() {
       'NBEATS': 'N-BEATS'
     };
     
-    // Default params per model type
+    // Default params per model type - ML models use defaultLags from strategy
     const defaultParams: Record<ModelType, any> = {
-      'LAG': { lag: 1 },
-      'LINEAR_REGRESSION': { lags: [1, 7] },
-      'XGBOOST': { lags: [1, 7], n_estimators: 100, max_depth: 3, learning_rate: 0.1 },
+      'LAG': { lag: defaultLags[0] || 1 },
+      'LINEAR_REGRESSION': { lags: [...defaultLags] },
+      'XGBOOST': { lags: [...defaultLags], n_estimators: 100, max_depth: 3, learning_rate: 0.1 },
       'ARIMA': { p: 1, d: 1, q: 1 },
       'PROPHET': { daily_seasonality: false, weekly_seasonality: true, yearly_seasonality: true, seasonality_mode: 'additive' },
       'NBEATS': {}
@@ -1269,530 +1286,28 @@ export default function ForecastingPage() {
               </div>
             )}
 
-            {/* STEP 2: MODELS & CONFIG */}
+            {/* STEP 2: STRATEGY & MODELS */}
             {step === 2 && (
-              <div className="flex flex-col lg:grid lg:grid-cols-12 gap-6 lg:gap-8 h-full animate-in fade-in slide-in-from-bottom-4 duration-500">
-                
-                {/* Left: Model Palette */}
-                <div className="lg:col-span-4 space-y-3 lg:space-y-4 lg:border-r border-white/10 lg:pr-8">
-                  <h3 className="text-xs sm:text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4 lg:mb-6">Model Library</h3>
-                  
-                  <div className="grid grid-cols-2 lg:grid-cols-1 gap-2 lg:space-y-3">
-                    {[
-                      { id: 'LAG', name: 'Lag', desc: 'Naïve Baseline', Icon: Activity },
-                      { id: 'LINEAR_REGRESSION', name: 'Linear Regression', desc: 'Simple Baseline', Icon: LineChart },
-                      { id: 'ARIMA', name: 'ARIMA', desc: 'Statistical Baseline', Icon: Activity },
-                      { id: 'PROPHET', name: 'Prophet', desc: 'Facebook model', Icon: Target },
-                      { id: 'XGBOOST', name: 'XGBoost', desc: 'Gradient Boosting', Icon: Network },
-                    ].map((m) => (
-                      <button 
-                        key={m.id}
-                        onClick={() => addModel(m.id as ModelType)}
-                        className="w-full text-left p-3 lg:p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 hover:border-amber-500/30 transition-all group"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2 lg:gap-3">
-                            <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center group-hover:bg-amber-500/10 transition-all">
-                              <m.Icon size={18} className="text-slate-400 group-hover:text-amber-500 transition-colors" />
-                            </div>
-                            <div>
-                              <div className="font-medium text-xs lg:text-base text-slate-200 group-hover:text-white">{m.name}</div>
-                              <div className="text-[10px] lg:text-xs text-slate-500 hidden sm:block">{m.desc}</div>
-                            </div>
-                          </div>
-                          <Plus size={14} className="text-slate-600 group-hover:text-amber-500" />
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Right: Configuration */}
-                <div className="lg:col-span-8 flex flex-col">
-                  <h3 className="text-xs sm:text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4 lg:mb-6">Pipeline Configuration</h3>
-                  
-                  {/* Validation Strategy */}
-                  <div className="bg-white/5 border border-white/10 rounded-xl p-3 sm:p-5 mb-4 lg:mb-6">
-                    <h4 className="font-semibold text-sm sm:text-base text-white mb-3 sm:mb-4 flex items-center gap-2">
-                      <Settings size={14} className="text-amber-500" /> Validation Strategy
-                    </h4>
-                    
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8">
-                      {/* Training Ranges */}
-                      <div>
-                        <div className="flex items-center justify-between mb-3">
-                          <label className="text-xs sm:text-sm text-slate-400">Training Periods</label>
-                          <button 
-                            onClick={() => setTrainingRanges([...trainingRanges, { start: '', end: '' }])}
-                            className="text-xs text-amber-500 hover:text-amber-400 flex items-center gap-1"
-                          >
-                            <Plus size={12} /> Add Period
-                          </button>
-                        </div>
-                        <div className="space-y-2">
-                          {trainingRanges.map((range, idx) => (
-                            <div key={idx} className="flex items-center gap-2">
-                              <input 
-                                type="date" 
-                                value={range.start}
-                                onChange={(e) => {
-                                  const newRanges = [...trainingRanges];
-                                  newRanges[idx].start = e.target.value;
-                                  setTrainingRanges(newRanges);
-                                }}
-                                className="bg-black/20 border border-white/10 rounded px-2 py-1 text-xs text-white w-full"
-                              />
-                              <span className="text-slate-500">-</span>
-                              <input 
-                                type="date" 
-                                value={range.end}
-                                onChange={(e) => {
-                                  const newRanges = [...trainingRanges];
-                                  newRanges[idx].end = e.target.value;
-                                  setTrainingRanges(newRanges);
-                                }}
-                                className="bg-black/20 border border-white/10 rounded px-2 py-1 text-xs text-white w-full"
-                              />
-                              <button 
-                                onClick={() => setTrainingRanges(trainingRanges.filter((_, i) => i !== idx))}
-                                className="text-slate-500 hover:text-red-400"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-                          ))}
-                          {trainingRanges.length === 0 && (
-                            <p className="text-xs text-slate-600 italic">No training periods defined.</p>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Prediction Ranges */}
-                      <div>
-                        <div className="flex items-center justify-between mb-3">
-                          <label className="text-sm text-slate-400">Prediction Periods</label>
-                          <button 
-                            onClick={() => setPredictionRanges([...predictionRanges, { start: '', end: '' }])}
-                            className="text-xs text-amber-500 hover:text-amber-400 flex items-center gap-1"
-                          >
-                            <Plus size={12} /> Add Period
-                          </button>
-                        </div>
-                        <div className="space-y-2">
-                          {predictionRanges.map((range, idx) => (
-                            <div key={idx} className="flex items-center gap-2">
-                              <input 
-                                type="date" 
-                                value={range.start}
-                                onChange={(e) => {
-                                  const newRanges = [...predictionRanges];
-                                  newRanges[idx].start = e.target.value;
-                                  setPredictionRanges(newRanges);
-                                }}
-                                className="bg-black/20 border border-white/10 rounded px-2 py-1 text-xs text-white w-full"
-                              />
-                              <span className="text-slate-500">-</span>
-                              <input 
-                                type="date" 
-                                value={range.end}
-                                onChange={(e) => {
-                                  const newRanges = [...predictionRanges];
-                                  newRanges[idx].end = e.target.value;
-                                  setPredictionRanges(newRanges);
-                                }}
-                                className="bg-black/20 border border-white/10 rounded px-2 py-1 text-xs text-white w-full"
-                              />
-                              <button 
-                                onClick={() => setPredictionRanges(predictionRanges.filter((_, i) => i !== idx))}
-                                className="text-slate-500 hover:text-red-400"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-                          ))}
-                          {predictionRanges.length === 0 && (
-                            <p className="text-xs text-slate-600 italic">No prediction periods defined.</p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-                    {selectedModels.length === 0 ? (
-                      <div className="h-full flex flex-col items-center justify-center text-slate-500 border-2 border-dashed border-white/5 rounded-xl">
-                        <Settings className="w-12 h-12 mb-4 opacity-20" />
-                        <p>Select models from the library to configure them</p>
-                      </div>
-                    ) : (
-                      selectedModels.map((model) => (
-                        <div key={model.id} className="bg-white/5 border border-white/10 rounded-xl p-5 animate-in zoom-in-95 duration-300">
-                          <div className="flex justify-between items-start mb-6 border-b border-white/5 pb-4">
-                            <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 rounded bg-amber-500/10 flex items-center justify-center text-amber-500 font-bold text-xs">
-                                {model.type.substring(0, 3)}
-                              </div>
-                              <div className="flex-1">
-                                <input
-                                  type="text"
-                                  defaultValue={model.name}
-                                  onBlur={(e) => updateModelName(model.id, e.target.value)}
-                                  className="font-semibold text-white bg-transparent border-b border-transparent hover:border-white/20 focus:border-amber-500 focus:outline-none w-full transition-colors"
-                                />
-                                <p className="text-xs text-slate-500">ID: {model.id}</p>
-                              </div>
-                            </div>
-                            <button 
-                              onClick={() => setSelectedModels(selectedModels.filter(m => m.id !== model.id))}
-                              className="text-slate-500 hover:text-red-400 transition-colors"
-                            >
-                              <X size={18} />
-                            </button>
-                          </div>
-
-                          {/* Dynamic Forms */}
-                          <div className="grid grid-cols-2 gap-6">
-                            {model.type === 'LAG' && (
-                              <div className="col-span-2">
-                                <label className="text-xs text-slate-400 mb-2 block">Lag Period</label>
-                                <SingleNumberInput
-                                  value={(model.params as any).lag ?? 1}
-                                  min={0}
-                                  onChange={(value) => updateModelParams(model.id, { lag: value })}
-                                  placeholder="1"
-                                />
-                                <p className="text-[10px] text-slate-500 mt-1">Predict using value from N periods ago (e.g., lag=1 uses previous period)</p>
-                              </div>
-                            )}
-
-                            {model.type === 'LINEAR_REGRESSION' && (
-                              <>
-                                <div className="col-span-2">
-                                  <label className="text-xs text-slate-400 mb-2 block">Target Lags</label>
-                                  <TagInput
-                                    values={'lags' in model.params ? model.params.lags : [1, 7]}
-                                    onChange={(lags) => updateModelParams(model.id, { lags })}
-                                    placeholder="Type a lag and press Enter (e.g., 1, 7, 14)"
-                                  />
-                                  <p className="text-[10px] text-slate-500 mt-1">Press Enter to add a lag period</p>
-                                </div>
-                                
-                                {/* Target Mode */}
-                                <div>
-                                  <label className="text-xs text-slate-400 mb-2 block">Target Mode</label>
-                                  <SegmentedControl
-                                    value={(model.params as LinearRegressionParams).target_mode ?? 'raw'}
-                                    options={[
-                                      { value: 'raw', label: 'Raw (predict y)' },
-                                      { value: 'residual', label: 'Residual (y - y_lag)' }
-                                    ]}
-                                    onChange={(value) => updateModelParams(model.id, { target_mode: value as 'raw' | 'residual' })}
-                                  />
-                                  <p className="text-[10px] text-slate-500 mt-1">Raw = predict target directly, Residual = predict difference</p>
-                                </div>
-                                
-                                {/* Residual Lag (only visible when residual mode) */}
-                                <div>
-                                  <label className="text-xs text-slate-400 mb-2 block">
-                                    Residual Lag {(model.params as LinearRegressionParams).target_mode === 'residual' ? '' : '(disabled)'}
-                                  </label>
-                                  {(model.params as LinearRegressionParams).target_mode === 'residual' ? (
-                                    <SingleNumberInput
-                                      value={(model.params as LinearRegressionParams).residual_lag ?? 1}
-                                      min={0}
-                                      onChange={(value) => updateModelParams(model.id, { residual_lag: value })}
-                                      placeholder="1"
-                                    />
-                                  ) : (
-                                    <div className="glass-input w-full p-2 rounded-lg text-sm opacity-40 text-slate-600 text-center">Disabled</div>
-                                  )}
-                                  <p className="text-[10px] text-slate-500 mt-1">Which lag to subtract (e.g., 1 = y - y_t-1)</p>
-                                </div>
-                                
-                                {/* Standardize */}
-                                <div className="col-span-2">
-                                  <label className="flex items-center gap-3 p-3 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-amber-500/30">
-                                    <input 
-                                      type="checkbox" 
-                                      checked={(model.params as LinearRegressionParams).standardize ?? false}
-                                      onChange={(e) => updateModelParams(model.id, { standardize: e.target.checked })}
-                                      className="accent-amber-500 w-4 h-4" 
-                                    />
-                                    <div>
-                                      <span className="text-sm text-slate-300">Standardize Features</span>
-                                      <p className="text-[10px] text-slate-500">Center and scale features (useful for regularized models)</p>
-                                    </div>
-                                  </label>
-                                </div>
-                                
-                                {/* Feature Configuration Panel */}
-                                <div className="col-span-2">
-                                  <FeatureConfigPanel 
-                                    model={model} 
-                                    updateModelParams={updateModelParams} 
-                                    availableColumns={availableColumns} 
-                                  />
-                                </div>
-                              </>
-                            )}
-
-                            {model.type === 'XGBOOST' && (() => {
-                              const params = model.params as any;
-                              return (
-                              <>
-                                {/* Target Lags */}
-                                <div className="col-span-2">
-                                  <label className="text-xs text-slate-400 mb-2 block">Target Lags</label>
-                                  <TagInput
-                                    values={params.lags ?? [1, 7, 14, 30]}
-                                    onChange={(lags) => updateModelParams(model.id, { lags } as any)}
-                                    placeholder="Type a lag and press Enter (e.g., 1, 7, 14)"
-                                  />
-                                  <p className="text-[10px] text-slate-500 mt-1">Press Enter to add a lag period</p>
-                                </div>
-                                
-                                {/* Target Mode */}
-                                <div>
-                                  <label className="text-xs text-slate-400 mb-2 block">Target Mode</label>
-                                  <SegmentedControl
-                                    value={params.target_mode ?? 'raw'}
-                                    options={[
-                                      { value: 'raw', label: 'Raw (predict y)' },
-                                      { value: 'residual', label: 'Residual (y - y_lag)' }
-                                    ]}
-                                    onChange={(value) => updateModelParams(model.id, { target_mode: value } as any)}
-                                  />
-                                  <p className="text-[10px] text-slate-500 mt-1">Raw = predict target directly, Residual = predict difference</p>
-                                </div>
-                                
-                                {/* Residual Lag */}
-                                <div>
-                                  <label className="text-xs text-slate-400 mb-2 block">
-                                    Residual Lag {params.target_mode === 'residual' ? '' : '(disabled)'}
-                                  </label>
-                                  {params.target_mode === 'residual' ? (
-                                    <SingleNumberInput
-                                      value={params.residual_lag ?? 1}
-                                      min={0}
-                                      onChange={(value) => updateModelParams(model.id, { residual_lag: value } as any)}
-                                      placeholder="1"
-                                    />
-                                  ) : (
-                                    <div className="glass-input w-full p-2 rounded-lg text-sm opacity-40 text-slate-600 text-center">Disabled</div>
-                                  )}
-                                  <p className="text-[10px] text-slate-500 mt-1">Which lag to subtract</p>
-                                </div>
-                                
-                                {/* XGBoost Specific Params */}
-                                <div>
-                                  <Slider
-                                    value={params.n_estimators ?? 100}
-                                    min={10}
-                                    max={1000}
-                                    step={10}
-                                    onChange={(value) => updateModelParams(model.id, { n_estimators: value } as any)}
-                                    label="N Estimators (trees in ensemble)"
-                                  />
-                                </div>
-                                <div>
-                                  <Slider
-                                    value={params.max_depth ?? 6}
-                                    min={1}
-                                    max={20}
-                                    step={1}
-                                    onChange={(value) => updateModelParams(model.id, { max_depth: value } as any)}
-                                    label="Max Depth (tree complexity)"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-xs text-slate-400 mb-2 block">Learning Rate</label>
-                                  <div className="flex flex-col sm:flex-row gap-2">
-                                    <input 
-                                      type="text" 
-                                      inputMode="decimal"
-                                      value={params.learning_rate ?? 0.1}
-                                      onChange={(e) => {
-                                        const val = parseFloat(e.target.value);
-                                        if (!isNaN(val) && val > 0 && val <= 1) {
-                                          updateModelParams(model.id, { learning_rate: val } as any);
-                                        }
-                                      }}
-                                      className="glass-input flex-1 p-2 rounded-lg text-sm" 
-                                    />
-                                    <select
-                                      value=""
-                                      onChange={(e) => e.target.value && updateModelParams(model.id, { learning_rate: parseFloat(e.target.value) } as any)}
-                                      className="glass-input px-2 rounded-lg text-xs bg-slate-900 text-white [&>option]:bg-slate-900 [&>option]:text-white"
-                                    >
-                                      <option value="">Presets</option>
-                                      <option value="0.001">0.001 (slow)</option>
-                                      <option value="0.01">0.01 (medium)</option>
-                                      <option value="0.1">0.1 (fast)</option>
-                                      <option value="0.3">0.3 (aggressive)</option>
-                                    </select>
-                                  </div>
-                                </div>
-                                
-                                {/* Feature Configuration Panel */}
-                                <div className="col-span-2">
-                                  <FeatureConfigPanel 
-                                    model={model} 
-                                    updateModelParams={updateModelParams} 
-                                    availableColumns={availableColumns} 
-                                  />
-                                </div>
-                              </>
-                              );
-                            })()}
-
-                            {model.type === 'ARIMA' && (() => {
-                              const params = model.params as any;
-                              return (
-                              <>
-                                <div>
-                                  <Slider
-                                    value={params.p ?? 1}
-                                    min={0}
-                                    max={10}
-                                    step={1}
-                                    onChange={(value) => updateModelParams(model.id, { p: value } as any)}
-                                    label="P (Auto-regressive order)"
-                                  />
-                                </div>
-                                <div>
-                                  <Slider
-                                    value={params.d ?? 1}
-                                    min={0}
-                                    max={3}
-                                    step={1}
-                                    onChange={(value) => updateModelParams(model.id, { d: value } as any)}
-                                    label="D (Differencing order)"
-                                  />
-                                </div>
-                                <div>
-                                  <Slider
-                                    value={params.q ?? 1}
-                                    min={0}
-                                    max={10}
-                                    step={1}
-                                    onChange={(value) => updateModelParams(model.id, { q: value } as any)}
-                                    label="Q (Moving average order)"
-                                  />
-                                </div>
-                                <div className="col-span-2 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-                                  <p className="text-[10px] text-blue-300">
-                                    💡 ARIMA is a univariate model - it uses only the target variable's history. 
-                                    Common values: (1,1,1) for simple series, (5,1,0) for AR-heavy, (0,1,1) for MA-heavy.
-                                  </p>
-                                </div>
-                              </>
-                              );
-                            })()}
-
-                            {model.type === 'PROPHET' && (() => {
-                              const params = model.params as any;
-                              return (
-                              <>
-                                {/* Lag Regressors - Key for predictive performance */}
-                                <div className="col-span-2">
-                                  <div className="flex items-center justify-between mb-2">
-                                    <label className="text-xs text-slate-400">Lag Regressors</label>
-                                    <label className="flex items-center gap-2 cursor-pointer">
-                                      <input 
-                                        type="checkbox" 
-                                        checked={params.use_lag_regressors ?? true}
-                                        onChange={(e) => updateModelParams(model.id, { use_lag_regressors: e.target.checked } as any)}
-                                        className="accent-amber-500 w-4 h-4" 
-                                      />
-                                      <span className="text-xs text-slate-300">Enable</span>
-                                    </label>
-                                  </div>
-                                  {params.use_lag_regressors !== false ? (
-                                    <TagInput
-                                      values={params.lag_regressors ?? [1, 7]}
-                                      onChange={(lags) => updateModelParams(model.id, { lag_regressors: lags } as any)}
-                                      placeholder="Type a lag and press Enter (e.g., 1, 7, 14)"
-                                    />
-                                  ) : (
-                                    <div className="glass-input w-full p-2 rounded-lg text-sm opacity-40 text-slate-600">Disabled</div>
-                                  )}
-                                  <p className="text-[10px] text-slate-500 mt-1">Past values to use as regressors (e.g., 1 = yesterday, 7 = last week)</p>
-                                </div>
-                                
-                                {/* Seasonality Checkboxes */}
-                                <div className="col-span-2">
-                                  <label className="text-xs text-slate-400 mb-2 block">Seasonality Components</label>
-                                  <div className="grid grid-cols-3 gap-3">
-                                    <label className="flex items-center gap-2 p-3 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-amber-500/30">
-                                      <input 
-                                        type="checkbox" 
-                                        checked={params.daily_seasonality ?? false}
-                                        onChange={(e) => updateModelParams(model.id, { daily_seasonality: e.target.checked } as any)}
-                                        className="accent-amber-500 w-4 h-4" 
-                                      />
-                                      <span className="text-sm text-slate-300">Daily</span>
-                                    </label>
-                                    <label className="flex items-center gap-2 p-3 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-amber-500/30">
-                                      <input 
-                                        type="checkbox" 
-                                        checked={params.weekly_seasonality ?? true}
-                                        onChange={(e) => updateModelParams(model.id, { weekly_seasonality: e.target.checked } as any)}
-                                        className="accent-amber-500 w-4 h-4" 
-                                      />
-                                      <span className="text-sm text-slate-300">Weekly</span>
-                                    </label>
-                                    <label className="flex items-center gap-2 p-3 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-amber-500/30">
-                                      <input 
-                                        type="checkbox" 
-                                        checked={params.yearly_seasonality ?? true}
-                                        onChange={(e) => updateModelParams(model.id, { yearly_seasonality: e.target.checked } as any)}
-                                        className="accent-amber-500 w-4 h-4" 
-                                      />
-                                      <span className="text-sm text-slate-300">Yearly</span>
-                                    </label>
-                                  </div>
-                                </div>
-                                
-                                <div>
-                                  <label className="text-xs text-slate-400 mb-2 block">Seasonality Mode</label>
-                                  <SegmentedControl
-                                    value={params.seasonality_mode ?? 'additive'}
-                                    options={[
-                                      { value: 'additive', label: 'Additive' },
-                                      { value: 'multiplicative', label: 'Multiplicative' }
-                                    ]}
-                                    onChange={(value) => updateModelParams(model.id, { seasonality_mode: value } as any)}
-                                  />
-                                  <p className="text-[10px] text-slate-500 mt-1">Use multiplicative for data where seasonal effects grow with trend</p>
-                                </div>
-                                
-                                <div className="col-span-2 p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg">
-                                  <p className="text-[10px] text-purple-300">
-                                    💡 <strong>Lag regressors are key!</strong> Without them, Prophet only uses seasonality (smooth predictions). 
-                                    With lag_1, it uses yesterday's value to predict today → much better for temperature forecasting.
-                                  </p>
-                                </div>
-                              </>
-                              );
-                            })()}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-
-                  <div className="mt-4 lg:mt-6 pt-4 lg:pt-6 border-t border-white/10 flex justify-between items-center">
-                    <button onClick={() => setStep(1)} className="text-slate-400 hover:text-white transition-colors text-sm sm:text-base">Back</button>
-                    <button 
-                      onClick={startTraining}
-                      disabled={selectedModels.length === 0}
-                      className="flex items-center gap-2 px-4 py-2 sm:px-8 sm:py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-black font-bold rounded-lg shadow-[0_0_20px_rgba(245,158,11,0.3)] transition-all text-sm sm:text-base"
-                    >
-                      <Play size={16} fill="currentColor" /> Start Training
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <StrategyStep
+                data={data}
+                fullData={fullData}
+                availableColumns={availableColumns}
+                selectedModels={selectedModels}
+                setSelectedModels={setSelectedModels}
+                addModel={addModel}
+                updateModelParams={updateModelParams}
+                updateModelName={updateModelName}
+                trainingRanges={trainingRanges}
+                setTrainingRanges={setTrainingRanges}
+                predictionRanges={predictionRanges}
+                setPredictionRanges={setPredictionRanges}
+                forecastHorizon={forecastHorizon}
+                setForecastHorizon={setForecastHorizon}
+                defaultLags={defaultLags}
+                setDefaultLags={setDefaultLags}
+                onBack={() => setStep(1)}
+                onStartTraining={startTraining}
+              />
             )}
 
             {/* STEP 3: RESULTS */}
@@ -2005,6 +1520,61 @@ export default function ForecastingPage() {
                         });
                       })()}
                     </div>
+
+                    {/* Horizon Metrics Section - Only show if multi-step forecasting was used */}
+                    {results.some(r => r.metrics_by_horizon && r.metrics_by_horizon.length > 1) && (
+                      <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
+                        <div className="p-3 sm:p-4 border-b border-white/10">
+                          <h3 className="font-semibold text-sm sm:text-base text-white flex items-center gap-2">
+                            <TrendingUp size={16} className="text-blue-400" />
+                            Metrics by Horizon Step
+                          </h3>
+                          <p className="text-xs text-slate-500 mt-1">
+                            Error breakdown for each step ahead in the forecast (h=1 is 1 step ahead, h=2 is 2 steps ahead, etc.)
+                          </p>
+                        </div>
+                        <div className="p-3 sm:p-4 space-y-4">
+                          {results.filter(r => r.metrics_by_horizon && r.metrics_by_horizon.length > 1 && !r.error).map(res => {
+                            const horizonMetrics = res.metrics_by_horizon!;
+                            const maxRmse = Math.max(...horizonMetrics.map(h => h.rmse));
+                            
+                            return (
+                              <div key={res.model_id} className="space-y-2">
+                                <h4 className="text-sm font-medium text-slate-300">{res.model_name}</h4>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                                  {horizonMetrics.map(hm => {
+                                    const rmsePercent = (hm.rmse / maxRmse) * 100;
+                                    const isLast = hm.horizon_step === horizonMetrics.length;
+                                    
+                                    return (
+                                      <div 
+                                        key={hm.horizon_step} 
+                                        className={`bg-black/20 rounded-lg p-2.5 border ${isLast ? 'border-amber-500/30' : 'border-white/5'}`}
+                                      >
+                                        <div className="flex items-center justify-between mb-1.5">
+                                          <span className="text-xs font-medium text-white">h = {hm.horizon_step}</span>
+                                          <span className="text-[10px] text-slate-500">{hm.count} samples</span>
+                                        </div>
+                                        <div className="h-1.5 bg-white/10 rounded-full mb-1.5 overflow-hidden">
+                                          <div 
+                                            className="h-full bg-gradient-to-r from-blue-500 to-blue-400 rounded-full transition-all"
+                                            style={{ width: `${rmsePercent}%` }}
+                                          />
+                                        </div>
+                                        <div className="flex justify-between text-[10px]">
+                                          <span className="text-slate-400">RMSE: <span className="text-white font-mono">{hm.rmse.toFixed(2)}</span></span>
+                                          <span className="text-slate-400">MAE: <span className="text-white font-mono">{hm.mae.toFixed(2)}</span></span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Feature Importance Section */}
                     {results.some(r => r.feature_importance && r.feature_importance.length > 0) && (

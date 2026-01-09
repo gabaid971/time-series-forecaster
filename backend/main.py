@@ -41,12 +41,20 @@ class DateRange(BaseModel):
     start: str
     end: str
 
+class ForecastStrategyConfig(BaseModel):
+    """Configuration for multi-step forecasting."""
+    horizon: int = 1                    # Number of steps to forecast ahead
+    mode: str = "direct"                # 'direct' or 'recursive'
+    sliding_window: Optional[bool] = False  # Whether to use sliding window validation
+    window_size: Optional[int] = None   # Size of sliding window (if enabled)
+
 class DataConfig(BaseModel):
     target_column: str
     date_column: str
     frequency: str
     training_ranges: List[DateRange]
     prediction_ranges: List[DateRange]
+    forecast_strategy: Optional[ForecastStrategyConfig] = None
 
 class ModelConfig(BaseModel):
     id: str
@@ -66,6 +74,14 @@ class ModelMetrics(BaseModel):
     r2: float
     execution_time: float
 
+class HorizonMetrics(BaseModel):
+    """Metrics for a specific forecast horizon step."""
+    horizon_step: int
+    rmse: float
+    mae: float
+    mape: float
+    count: int  # Number of predictions at this horizon
+
 class FeatureImportance(BaseModel):
     feature: str
     importance: float
@@ -75,6 +91,7 @@ class ModelResult(BaseModel):
     model_name: str
     metrics: ModelMetrics
     forecast: List[Dict[str, Any]]
+    metrics_by_horizon: Optional[List[HorizonMetrics]] = None  # Per-step metrics
     feature_importance: Optional[List[FeatureImportance]] = None
     shap_analysis: Optional[Dict[str, Any]] = None  # SHAP values for XGBoost
     error: Optional[str] = None  # Error message if model training failed
@@ -528,6 +545,194 @@ def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float
     
     return {"rmse": rmse, "mae": mae, "mape": mape, "r2": r2}
 
+
+def calculate_metrics_by_horizon(forecasts: List[Dict[str, Any]], target_col: str) -> List[Dict[str, Any]]:
+    """
+    Calculate metrics grouped by horizon step.
+    
+    Args:
+        forecasts: List of forecast dicts with 'prediction', target_col, and 'horizon_step'
+        target_col: Name of the actual value column
+    
+    Returns:
+        List of {horizon_step, rmse, mae, mape, count} dicts
+    """
+    from collections import defaultdict
+    
+    # Group by horizon step
+    by_horizon = defaultdict(list)
+    for f in forecasts:
+        h = f.get("horizon_step", 1)
+        actual = f.get(target_col)
+        pred = f.get("prediction")
+        if actual is not None and pred is not None:
+            by_horizon[h].append((float(actual), float(pred)))
+    
+    metrics_list = []
+    for h in sorted(by_horizon.keys()):
+        pairs = by_horizon[h]
+        if len(pairs) == 0:
+            continue
+        
+        y_true = np.array([p[0] for p in pairs])
+        y_pred = np.array([p[1] for p in pairs])
+        
+        rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+        mae = float(np.mean(np.abs(y_true - y_pred)))
+        
+        # MAPE
+        mask = y_true != 0
+        if mask.sum() > 0:
+            mape = float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])))
+        else:
+            mape = 0.0
+        
+        metrics_list.append({
+            "horizon_step": h,
+            "rmse": rmse,
+            "mae": mae,
+            "mape": mape,
+            "count": len(pairs)
+        })
+    
+    return metrics_list
+
+
+def block_recursive_forecast(
+    model,
+    df: pl.DataFrame,
+    date_col: str,
+    target_col: str,
+    feature_names: List[str],
+    feature_config: 'FeatureConfig',
+    horizon: int,
+    pred_start_idx: int,
+    pred_end_idx: int,
+    target_mode: str = "raw",
+    residual_lag: int = 1,
+    standardize: bool = False,
+    feature_means: Optional[np.ndarray] = None,
+    feature_stds: Optional[np.ndarray] = None
+) -> List[Dict[str, Any]]:
+    """
+    Generate forecasts using block-wise recursive prediction.
+    
+    Strategy:
+    - Model trained ONCE on [0, pred_start_idx - 1]
+    - Prediction range [pred_start_idx, pred_end_idx] split into blocks of size `horizon`
+    - Within each block: recursive prediction (use predictions for lags)
+    - Between blocks: reset to actual values for lags
+    
+    Block 1: [pred_start_idx, pred_start_idx + horizon - 1]
+      - Step 1: use actual historical lags
+      - Step 2: use prediction from step 1 for lag_1, actual for other lags
+      - Step h: fully recursive within block
+      
+    Block 2: [pred_start_idx + horizon, pred_start_idx + 2*horizon - 1]
+      - RESET: use actual values (including block 1 actuals) for lags
+      - Then recursive within block
+    
+    Args:
+        model: Trained sklearn-compatible model
+        df: Full dataframe with features already computed (sorted by date)
+        date_col, target_col: Column names
+        feature_names: Features used by model
+        feature_config: For lag information
+        horizon: Block size (h steps per block)
+        pred_start_idx: Index where prediction starts
+        pred_end_idx: Index where prediction ends (inclusive)
+        target_mode: "raw" or "residual"
+        residual_lag: Lag for residual reconstruction
+        standardize, feature_means, feature_stds: Standardization params
+    
+    Returns:
+        List of forecast dicts: {date, prediction, actual, block_num, step_in_block}
+    """
+    target_lags = feature_config.target_lags if feature_config else [1]
+    forecasts = []
+    
+    # Process blocks
+    block_num = 0
+    current_idx = pred_start_idx
+    
+    while current_idx <= pred_end_idx:
+        block_num += 1
+        block_end_idx = min(current_idx + horizon - 1, pred_end_idx)
+        block_predictions = {}  # step_in_block -> predicted value
+        
+        for step, idx in enumerate(range(current_idx, block_end_idx + 1), start=1):
+            if idx >= df.height:
+                break
+            
+            row = df.row(idx, named=True)
+            
+            # Build feature vector
+            feature_values = []
+            for feat_name in feature_names:
+                if feat_name.startswith("target_lag_"):
+                    lag = int(feat_name.split("_")[-1])
+                    
+                    # Which step in this block does this lag refer to?
+                    lag_refers_to_step = step - lag
+                    
+                    if lag_refers_to_step > 0 and lag_refers_to_step in block_predictions:
+                        # Use prediction from earlier in THIS block (recursive)
+                        feature_values.append(block_predictions[lag_refers_to_step])
+                    else:
+                        # Use actual value from dataframe (historical or previous blocks)
+                        feature_values.append(row.get(feat_name, 0))
+                else:
+                    feature_values.append(row.get(feat_name, 0))
+            
+            # Skip if any None
+            if any(v is None for v in feature_values):
+                continue
+            
+            X = np.array([feature_values])
+            
+            # Standardization
+            if standardize and feature_means is not None and feature_stds is not None:
+                X = (X - feature_means) / feature_stds
+            
+            # Predict
+            y_pred_raw = float(model.predict(X)[0])
+            
+            # Residual mode reconstruction
+            if target_mode == "residual":
+                residual_feat = f"target_lag_{residual_lag}"
+                lag_refers_to_step = step - residual_lag
+                
+                if lag_refers_to_step > 0 and lag_refers_to_step in block_predictions:
+                    y_lag = block_predictions[lag_refers_to_step]
+                else:
+                    y_lag = row.get(residual_feat, 0)
+                
+                y_pred = y_pred_raw + y_lag if y_lag is not None else y_pred_raw
+            else:
+                y_pred = y_pred_raw
+            
+            # Store for recursive use within block
+            block_predictions[step] = y_pred
+            
+            # Get actual and date
+            actual = row.get(target_col)
+            date_value = row.get(date_col)
+            
+            forecasts.append({
+                date_col: date_value.isoformat() if hasattr(date_value, 'isoformat') else str(date_value),
+                "prediction": float(y_pred),
+                target_col: float(actual) if actual is not None else None,
+                "block_num": block_num,
+                "step_in_block": step,
+                "horizon_step": step  # For compatibility with metrics calculation
+            })
+        
+        # Move to next block
+        current_idx = block_end_idx + 1
+    
+    return forecasts
+
+
 # ============================================================================
 # MODEL TRAINERS
 # ============================================================================
@@ -538,7 +743,8 @@ def train_lag(
     target_col: str,
     training_ranges: List[DateRange],
     prediction_ranges: List[DateRange],
-    params: Dict[str, Any]
+    params: Dict[str, Any],
+    forecast_strategy: Optional[ForecastStrategyConfig] = None
 ) -> Dict[str, Any]:
     """
     Baseline model: predict using a simple lag.
@@ -546,12 +752,21 @@ def train_lag(
     Params:
     - lag: int - which lag to use for prediction (default: 1)
     
+    With horizon > 1, uses block-wise recursive:
+    - Block 1: pred(t+1) = y(t₀), pred(t+2) = pred(t+1), ...
+    - Block 2: reset to actual values, then recursive again
+    
     Returns metrics and predictions.
     """
     start_time = time.time()
     
     # Get lag parameter
     lag = params.get("lag", 1)
+    
+    # Determine horizon
+    horizon = 1
+    if forecast_strategy is not None:
+        horizon = forecast_strategy.horizon
     
     # Create lagged column
     df_lagged = df.with_columns(
@@ -570,35 +785,104 @@ def train_lag(
     if train_df.height == 0:
         raise ValueError(f"No training data available after applying lag {lag}")
     
-    # Calculate metrics on training data
+    # Calculate metrics on training data (still using naive lag for training metrics)
     y_true = train_df[target_col].to_numpy()
     y_pred = train_df[f"lag_{lag}"].to_numpy()
     
-    metrics = calculate_metrics(y_true, y_pred)
+    training_metrics = calculate_metrics(y_true, y_pred)
     
     # Generate predictions for all prediction ranges
     all_forecasts = []
+    all_actuals = []
+    all_predictions = []
+    
     for pr in prediction_ranges:
-        pred_df = filter_by_date_range(df_lagged, date_col, pr.start, pr.end).drop_nulls(subset=[target_col, f"lag_{lag}"])
+        pred_df = filter_by_date_range(df_lagged, date_col, pr.start, pr.end)
+        pred_df = pred_df.drop_nulls(subset=[target_col, f"lag_{lag}"])
         
-        for row in pred_df.iter_rows(named=True):
-            date_value = row[date_col]
-            all_forecasts.append({
-                date_col: date_value.isoformat() if hasattr(date_value, 'isoformat') else str(date_value),
-                "prediction": float(row[f"lag_{lag}"]),
-                target_col: float(row[target_col])
-            })
+        if pred_df.height == 0:
+            continue
+        
+        if horizon > 1:
+            # Block-wise recursive for lag model
+            rows = list(pred_df.iter_rows(named=True))
+            block_num = 0
+            idx = 0
+            
+            while idx < len(rows):
+                block_num += 1
+                block_predictions = {}  # step_in_block -> predicted value
+                block_end = min(idx + horizon, len(rows))
+                
+                for step, row_idx in enumerate(range(idx, block_end), start=1):
+                    row = rows[row_idx]
+                    date_value = row[date_col]
+                    actual = float(row[target_col])
+                    
+                    # For lag model: which step does the lag refer to?
+                    lag_refers_to_step = step - lag
+                    
+                    if lag_refers_to_step > 0 and lag_refers_to_step in block_predictions:
+                        # Use prediction from earlier in THIS block
+                        prediction = block_predictions[lag_refers_to_step]
+                    else:
+                        # Use actual value from dataframe
+                        prediction = float(row[f"lag_{lag}"])
+                    
+                    block_predictions[step] = prediction
+                    
+                    all_forecasts.append({
+                        date_col: date_value.isoformat() if hasattr(date_value, 'isoformat') else str(date_value),
+                        "prediction": prediction,
+                        target_col: actual,
+                        "block_num": block_num,
+                        "step_in_block": step,
+                        "horizon_step": step
+                    })
+                    all_actuals.append(actual)
+                    all_predictions.append(prediction)
+                
+                idx = block_end
+        else:
+            # Standard 1-step prediction
+            for row in pred_df.iter_rows(named=True):
+                date_value = row[date_col]
+                prediction = float(row[f"lag_{lag}"])
+                actual = float(row[target_col])
+                
+                all_forecasts.append({
+                    date_col: date_value.isoformat() if hasattr(date_value, 'isoformat') else str(date_value),
+                    "prediction": prediction,
+                    target_col: actual
+                })
+                all_actuals.append(actual)
+                all_predictions.append(prediction)
+    
+    # Calculate validation metrics
+    if all_actuals and all_predictions:
+        validation_metrics = calculate_metrics(
+            np.array(all_actuals),
+            np.array(all_predictions)
+        )
+    else:
+        validation_metrics = training_metrics
     
     execution_time = time.time() - start_time
     
-    return {
+    result = {
         "metrics": {
-            **metrics,
+            **validation_metrics,
             "execution_time": execution_time
         },
         "forecast": all_forecasts,
         "feature_importance": None
     }
+    
+    # Add metrics by horizon if horizon > 1
+    if horizon > 1 and all_forecasts:
+        result["metrics_by_horizon"] = calculate_metrics_by_horizon(all_forecasts, target_col)
+    
+    return result
 
 
 def train_linear_regression(
@@ -607,7 +891,8 @@ def train_linear_regression(
     target_col: str,
     training_ranges: List[DateRange],
     prediction_ranges: List[DateRange],
-    params: Dict[str, Any]
+    params: Dict[str, Any],
+    forecast_strategy: Optional[ForecastStrategyConfig] = None
 ) -> Dict[str, Any]:
     """
     Train a Linear Regression model with configurable features.
@@ -651,13 +936,13 @@ def train_linear_regression(
     # If residual mode, create the residual target
     if target_mode == "residual":
         residual_col = f"target_lag_{residual_lag}"
-        # Ensure we have the residual lag feature
+        # Ensure we have the residual lag column (for computing residual, NOT as a feature)
         if residual_col not in df_features.columns:
             df_features = df_features.with_columns(
                 pl.col(target_col).shift(residual_lag).alias(residual_col)
             )
-            if residual_col not in feature_names:
-                feature_names.append(residual_col)
+            # Note: We do NOT add residual_col to feature_names
+            # It's only used for residual calculation, not as a model feature
         
         # Create residual target: y_residual = y - y_lag
         df_features = df_features.with_columns(
@@ -704,12 +989,18 @@ def train_linear_regression(
     model = LinearRegression()
     model.fit(X_train, y_train)
     
+    # Determine forecast horizon
+    horizon = 1
+    if forecast_strategy is not None:
+        horizon = forecast_strategy.horizon
+    
     # Predict on prediction ranges
     all_predictions = []
     all_actuals = []
     forecast_output = []
     
     for pr in prediction_ranges:
+        # Find indices for prediction range
         pred_df = filter_by_date_range(df_features, date_col, pr.start, pr.end)
         
         # Check required columns for prediction
@@ -723,33 +1014,75 @@ def train_linear_regression(
         if pred_df.height == 0:
             continue
         
-        X_pred = pred_df.select(feature_names).to_numpy()
-        y_actual_original = pred_df.select(target_col).to_numpy().flatten()
-        dates = pred_df.select(date_col).to_series().to_list()
-        
-        # Standardize prediction features if needed
-        if standardize and feature_means is not None:
-            X_pred = (X_pred - feature_means) / feature_stds
-        
-        y_pred_raw = model.predict(X_pred)
-        
-        # If residual mode, reconstruct original scale: y_pred = y_pred_residual + y_lag
-        if target_mode == "residual":
-            y_lag_values = pred_df.select(f"target_lag_{residual_lag}").to_numpy().flatten()
-            y_pred = y_pred_raw + y_lag_values
+        if horizon > 1:
+            # Block-wise recursive forecasting
+            # Find start/end indices in the full sorted dataframe
+            pred_dates = pred_df.select(date_col).to_series().to_list()
+            first_date = pred_dates[0]
+            last_date = pred_dates[-1]
+            
+            # Find indices in df_features
+            all_dates = df_features.select(date_col).to_series().to_list()
+            try:
+                pred_start_idx = next(i for i, d in enumerate(all_dates) if d >= first_date)
+                pred_end_idx = next(i for i, d in enumerate(all_dates) if d >= last_date)
+            except StopIteration:
+                continue
+            
+            forecasts = block_recursive_forecast(
+                model=model,
+                df=df_features,
+                date_col=date_col,
+                target_col=target_col,
+                feature_names=feature_names,
+                feature_config=feature_config,
+                horizon=horizon,
+                pred_start_idx=pred_start_idx,
+                pred_end_idx=pred_end_idx,
+                target_mode=target_mode,
+                residual_lag=residual_lag,
+                standardize=standardize,
+                feature_means=feature_means,
+                feature_stds=feature_stds
+            )
+            
+            for f in forecasts:
+                forecast_output.append(f)
+                actual = f.get(target_col)
+                pred = f.get("prediction")
+                if actual is not None and pred is not None:
+                    all_actuals.append(actual)
+                    all_predictions.append(pred)
         else:
-            y_pred = y_pred_raw
-        
-        all_predictions.extend(y_pred)
-        all_actuals.extend(y_actual_original)
-        
-        # Build forecast output for frontend
-        for date, pred_val, actual_val in zip(dates, y_pred, y_actual_original):
-            forecast_output.append({
-                date_col: date.isoformat() if hasattr(date, 'isoformat') else str(date),
-                "prediction": float(pred_val),
-                target_col: float(actual_val)
-            })
+            # Standard 1-step prediction
+            X_pred = pred_df.select(feature_names).to_numpy()
+            y_actual_original = pred_df.select(target_col).to_numpy().flatten()
+            dates = pred_df.select(date_col).to_series().to_list()
+            
+            # Standardize prediction features if needed
+            if standardize and feature_means is not None:
+                X_pred = (X_pred - feature_means) / feature_stds
+            
+            y_pred_raw = model.predict(X_pred)
+            
+            # If residual mode, reconstruct original scale: y_pred = y_pred_residual + y_lag
+            if target_mode == "residual":
+                y_lag_values = pred_df.select(f"target_lag_{residual_lag}").to_numpy().flatten()
+                y_pred = y_pred_raw + y_lag_values
+            else:
+                y_pred = y_pred_raw
+            
+            all_predictions.extend(y_pred)
+            all_actuals.extend(y_actual_original)
+            
+            # Build forecast output for frontend
+            for date, pred_val, actual_val in zip(dates, y_pred, y_actual_original):
+                forecast_output.append({
+                    date_col: date.isoformat() if hasattr(date, 'isoformat') else str(date),
+                    "prediction": float(pred_val),
+                    target_col: float(actual_val),
+                    "horizon_step": 1
+                })
     
     # Calculate metrics (on original scale)
     if len(all_actuals) > 0:
@@ -759,6 +1092,11 @@ def train_linear_regression(
     
     execution_time = time.time() - start_time
     metrics["execution_time"] = execution_time
+    
+    # Calculate metrics by horizon step (for multi-step forecasting)
+    metrics_by_horizon = None
+    if horizon > 1 and len(forecast_output) > 0:
+        metrics_by_horizon = calculate_metrics_by_horizon(forecast_output, target_col)
     
     # Extract feature importance (coefficients for Linear Regression)
     feature_importance = []
@@ -773,7 +1111,8 @@ def train_linear_regression(
     return {
         "metrics": metrics,
         "forecast": forecast_output,
-        "feature_importance": feature_importance
+        "feature_importance": feature_importance,
+        "metrics_by_horizon": metrics_by_horizon
     }
 
 
@@ -946,7 +1285,8 @@ def train_xgboost(
     target_col: str,
     training_ranges: List[DateRange],
     prediction_ranges: List[DateRange],
-    params: Dict[str, Any]
+    params: Dict[str, Any],
+    forecast_strategy: Optional[ForecastStrategyConfig] = None
 ) -> Dict[str, Any]:
     """
     Train an XGBoost model with configurable features.
@@ -982,16 +1322,17 @@ def train_xgboost(
     # Build features
     df_features, feature_names = build_features(df.clone(), date_col, target_col, feature_config)
     
-    # For residual mode, create residual target and ensure lag feature exists
+    # For residual mode, create residual target and ensure lag column exists
     effective_target = target_col
     if target_mode == "residual":
         residual_col = f"target_lag_{residual_lag}"
+        # Ensure we have the residual lag column (for computing residual, NOT as a feature)
         if residual_col not in df_features.columns:
             df_features = df_features.with_columns(
                 pl.col(target_col).shift(residual_lag).alias(residual_col)
             )
-            if residual_col not in feature_names:
-                feature_names.append(residual_col)
+            # Note: We do NOT add residual_col to feature_names
+            # It's only used for residual calculation, not as a model feature
         
         df_features = df_features.with_columns(
             (pl.col(target_col) - pl.col(residual_col)).alias("_target_residual")
@@ -1029,6 +1370,11 @@ def train_xgboost(
     )
     model.fit(X_train, y_train)
     
+    # Determine forecast horizon
+    horizon = 1
+    if forecast_strategy is not None:
+        horizon = forecast_strategy.horizon
+    
     # Predict
     all_predictions = []
     all_actuals = []
@@ -1048,32 +1394,77 @@ def train_xgboost(
         if pred_df.height == 0:
             continue
         
-        X_pred = pred_df.select(feature_names).to_numpy()
-        y_actual_original = pred_df.select(target_col).to_numpy().flatten()
-        dates = pred_df.select(date_col).to_series().to_list()
-        
-        y_pred_raw = model.predict(X_pred)
-        
-        # If residual mode, reconstruct original scale
-        if target_mode == "residual":
-            y_lag_values = pred_df.select(f"target_lag_{residual_lag}").to_numpy().flatten()
-            y_pred = y_pred_raw + y_lag_values
+        if horizon > 1:
+            # Block-wise recursive forecasting
+            pred_dates = pred_df.select(date_col).to_series().to_list()
+            first_date = pred_dates[0]
+            last_date = pred_dates[-1]
+            
+            all_dates = df_features.select(date_col).to_series().to_list()
+            try:
+                pred_start_idx = next(i for i, d in enumerate(all_dates) if d >= first_date)
+                pred_end_idx = next(i for i, d in enumerate(all_dates) if d >= last_date)
+            except StopIteration:
+                continue
+            
+            forecasts = block_recursive_forecast(
+                model=model,
+                df=df_features,
+                date_col=date_col,
+                target_col=target_col,
+                feature_names=feature_names,
+                feature_config=feature_config,
+                horizon=horizon,
+                pred_start_idx=pred_start_idx,
+                pred_end_idx=pred_end_idx,
+                target_mode=target_mode,
+                residual_lag=residual_lag,
+                standardize=False,
+                feature_means=None,
+                feature_stds=None
+            )
+            
+            for f in forecasts:
+                forecast_output.append(f)
+                actual = f.get(target_col)
+                pred = f.get("prediction")
+                if actual is not None and pred is not None:
+                    all_actuals.append(actual)
+                    all_predictions.append(pred)
         else:
-            y_pred = y_pred_raw
-        
-        all_predictions.extend(y_pred)
-        all_actuals.extend(y_actual_original)
-        
-        for date, pred_val, actual_val in zip(dates, y_pred, y_actual_original):
-            forecast_output.append({
-                date_col: date.isoformat() if hasattr(date, 'isoformat') else str(date),
-                "prediction": float(pred_val),
-                target_col: float(actual_val)
-            })
+            # Standard 1-step prediction
+            X_pred = pred_df.select(feature_names).to_numpy()
+            y_actual_original = pred_df.select(target_col).to_numpy().flatten()
+            dates = pred_df.select(date_col).to_series().to_list()
+            
+            y_pred_raw = model.predict(X_pred)
+            
+            # If residual mode, reconstruct original scale
+            if target_mode == "residual":
+                y_lag_values = pred_df.select(f"target_lag_{residual_lag}").to_numpy().flatten()
+                y_pred = y_pred_raw + y_lag_values
+            else:
+                y_pred = y_pred_raw
+            
+            all_predictions.extend(y_pred)
+            all_actuals.extend(y_actual_original)
+            
+            for date, pred_val, actual_val in zip(dates, y_pred, y_actual_original):
+                forecast_output.append({
+                    date_col: date.isoformat() if hasattr(date, 'isoformat') else str(date),
+                    "prediction": float(pred_val),
+                    target_col: float(actual_val),
+                    "horizon_step": 1
+                })
     
     # Metrics (on original scale)
     metrics = calculate_metrics(np.array(all_actuals), np.array(all_predictions)) if all_actuals else {"rmse": 0, "mae": 0, "mape": 0, "r2": 0}
     metrics["execution_time"] = time.time() - start_time
+    
+    # Calculate metrics by horizon step (for multi-step forecasting)
+    metrics_by_horizon = None
+    if horizon > 1 and len(forecast_output) > 0:
+        metrics_by_horizon = calculate_metrics_by_horizon(forecast_output, target_col)
     
     # Feature importance from XGBoost
     feature_importance = [
@@ -1091,12 +1482,12 @@ def train_xgboost(
         feature_config=feature_config,
     )
 
-    print(shap_analysis)
     return {
         "metrics": metrics,
         "forecast": forecast_output,
         "feature_importance": feature_importance,
-        "shap_analysis": shap_analysis
+        "shap_analysis": shap_analysis,
+        "metrics_by_horizon": metrics_by_horizon
     }
 
 
@@ -1542,7 +1933,8 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
                         target_col=target_col,
                         training_ranges=request.data_config.training_ranges,
                         prediction_ranges=request.data_config.prediction_ranges,
-                        params=model_config.params
+                        params=model_config.params,
+                        forecast_strategy=request.data_config.forecast_strategy
                     )
                 elif model_config.type == "LINEAR_REGRESSION":
                     result = train_linear_regression(
@@ -1551,7 +1943,8 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
                         target_col=target_col,
                         training_ranges=request.data_config.training_ranges,
                         prediction_ranges=request.data_config.prediction_ranges,
-                        params=model_config.params
+                        params=model_config.params,
+                        forecast_strategy=request.data_config.forecast_strategy
                     )
                 elif model_config.type == "XGBOOST":
                     result = train_xgboost(
@@ -1560,7 +1953,8 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
                         target_col=target_col,
                         training_ranges=request.data_config.training_ranges,
                         prediction_ranges=request.data_config.prediction_ranges,
-                        params=model_config.params
+                        params=model_config.params,
+                        forecast_strategy=request.data_config.forecast_strategy
                     )
                 elif model_config.type == "ARIMA":
                     result = train_arima(
@@ -1597,6 +1991,7 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
                     model_name=model_config.name,
                     metrics=ModelMetrics(**result["metrics"]),
                     forecast=result["forecast"],
+                    metrics_by_horizon=[HorizonMetrics(**hm) for hm in result.get("metrics_by_horizon", [])] if result.get("metrics_by_horizon") else None,
                     feature_importance=[FeatureImportance(**fi) for fi in result.get("feature_importance", [])] if result.get("feature_importance") else None,
                     shap_analysis=result.get("shap_analysis")
                 ))

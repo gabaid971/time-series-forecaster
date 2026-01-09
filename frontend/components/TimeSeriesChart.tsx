@@ -41,7 +41,7 @@ export default function TimeSeriesChart({ data, dateColumn, targetColumn, title,
       type: 'scatter',
       mode: 'lines',
       marker: { color: '#f59e0b' }, // Amber-500
-      line: { width: 2, shape: 'spline' },
+      line: { width: 2 },
       name: 'Actual',
     }
   ];

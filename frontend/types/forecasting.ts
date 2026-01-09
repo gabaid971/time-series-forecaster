@@ -123,6 +123,16 @@ export interface DateRange {
   end: string;
 }
 
+// Forecast strategy configuration
+export type ForecastMode = 'direct' | 'recursive';
+
+export interface ForecastStrategyConfig {
+  horizon: number;              // Number of steps to forecast ahead
+  mode: ForecastMode;           // 'direct' if horizon <= min(lags), else 'recursive'
+  sliding_window?: boolean;     // Whether to use sliding window validation
+  window_size?: number;         // Size of sliding window (if enabled)
+}
+
 export interface TrainingRequest {
   data: any[]; // Raw CSV data
   data_config: {
@@ -131,6 +141,7 @@ export interface TrainingRequest {
     frequency: Frequency;
     training_ranges: DateRange[];
     prediction_ranges: DateRange[];
+    forecast_strategy?: ForecastStrategyConfig; // Optional multi-step config
   };
   models: ModelConfig[]; // Liste des modèles à entraîner
 }
@@ -149,6 +160,15 @@ export interface ModelMetrics {
   mape: number;
   r2: number;
   execution_time: number;
+}
+
+// Metrics per forecast horizon step
+export interface HorizonMetrics {
+  horizon_step: number;
+  rmse: number;
+  mae: number;
+  mape: number;
+  count: number;
 }
 
 export interface FeatureImportance {
@@ -190,6 +210,7 @@ export interface ModelResult {
   model_name: string;
   metrics: ModelMetrics;
   forecast: ForecastPoint[];
+  metrics_by_horizon?: HorizonMetrics[];  // Per-step metrics for multi-horizon
   feature_importance?: FeatureImportance[];
   shap_analysis?: ShapAnalysis;  // SHAP analysis for XGBoost models
   error?: string;  // Error message if model training failed
