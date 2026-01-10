@@ -72,6 +72,7 @@ class ModelMetrics(BaseModel):
     mae: float
     mape: float
     r2: float
+    msle: float
     execution_time: float
 
 class HorizonMetrics(BaseModel):
@@ -80,6 +81,7 @@ class HorizonMetrics(BaseModel):
     rmse: float
     mae: float
     mape: float
+    msle: float
     count: int  # Number of predictions at this horizon
 
 class FeatureImportance(BaseModel):
@@ -543,7 +545,14 @@ def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float
     ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
     r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
     
-    return {"rmse": rmse, "mae": mae, "mape": mape, "r2": r2}
+    # MSLE (Mean Squared Log Error) - only for positive values
+    mask_positive = (y_true > 0) & (y_pred > 0)
+    if mask_positive.sum() > 0:
+        msle = np.mean((np.log1p(y_true[mask_positive]) - np.log1p(y_pred[mask_positive])) ** 2)
+    else:
+        msle = 0.0
+    
+    return {"rmse": rmse, "mae": mae, "mape": mape, "r2": r2, "msle": msle}
 
 
 def calculate_metrics_by_horizon(forecasts: List[Dict[str, Any]], target_col: str) -> List[Dict[str, Any]]:
@@ -587,11 +596,19 @@ def calculate_metrics_by_horizon(forecasts: List[Dict[str, Any]], target_col: st
         else:
             mape = 0.0
         
+        # MSLE (Mean Squared Log Error) - only for positive values
+        mask_positive = (y_true > 0) & (y_pred > 0)
+        if mask_positive.sum() > 0:
+            msle = float(np.mean((np.log1p(y_true[mask_positive]) - np.log1p(y_pred[mask_positive])) ** 2))
+        else:
+            msle = 0.0
+        
         metrics_list.append({
             "horizon_step": h,
             "rmse": rmse,
             "mae": mae,
             "mape": mape,
+            "msle": msle,
             "count": len(pairs)
         })
     
@@ -1984,7 +2001,7 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
                     # For unimplemented models, return a placeholder
                     result = {
                         "metrics": {
-                            "rmse": 0, "mae": 0, "mape": 0, "r2": 0, "execution_time": 0
+                            "rmse": 0, "mae": 0, "mape": 0, "r2": 0, "msle": 0, "execution_time": 0
                         },
                         "forecast": [],
                         "feature_importance": None
@@ -2007,7 +2024,7 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
                 results.append(ModelResult(
                     model_id=model_config.id,
                     model_name=model_config.name,
-                    metrics=ModelMetrics(rmse=0, mae=0, mape=0, r2=0, execution_time=0),
+                    metrics=ModelMetrics(rmse=0, mae=0, mape=0, r2=0, msle=0, execution_time=0),
                     forecast=[],
                     error=error_msg
                 ))

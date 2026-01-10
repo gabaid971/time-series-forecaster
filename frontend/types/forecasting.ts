@@ -159,6 +159,7 @@ export interface ModelMetrics {
   mae: number;
   mape: number;
   r2: number;
+  msle: number;
   execution_time: number;
 }
 
@@ -168,6 +169,7 @@ export interface HorizonMetrics {
   rmse: number;
   mae: number;
   mape: number;
+  msle: number;
   count: number;
 }
 

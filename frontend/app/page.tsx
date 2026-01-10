@@ -1429,6 +1429,8 @@ export default function ForecastingPage() {
                               <th className="px-4 sm:px-6 py-3">RMSE</th>
                               <th className="px-4 sm:px-6 py-3">MAE</th>
                               <th className="px-4 sm:px-6 py-3">MAPE</th>
+                              <th className="px-4 sm:px-6 py-3">MSLE</th>
+                              <th className="px-4 sm:px-6 py-3">R²</th>
                               <th className="px-4 sm:px-6 py-3">Time</th>
                             </tr>
                           </thead>
@@ -1443,7 +1445,7 @@ export default function ForecastingPage() {
                                   return (
                                     <tr key={res.model_id} className="border-b border-white/5 bg-red-500/5">
                                       <td className="px-4 sm:px-6 py-3 font-medium text-red-400">{res.model_name}</td>
-                                      <td colSpan={4} className="px-4 sm:px-6 py-3 text-xs sm:text-sm text-red-300">
+                                      <td colSpan={6} className="px-4 sm:px-6 py-3 text-xs sm:text-sm text-red-300">
                                         ❌ {res.error}
                                       </td>
                                     </tr>
@@ -1459,6 +1461,8 @@ export default function ForecastingPage() {
                                     <td className="px-4 sm:px-6 py-3 font-mono text-xs sm:text-sm">{res.metrics.rmse.toFixed(2)}</td>
                                     <td className="px-4 sm:px-6 py-3 font-mono text-xs sm:text-sm">{res.metrics.mae.toFixed(2)}</td>
                                     <td className="px-4 sm:px-6 py-3 font-mono text-xs sm:text-sm">{(res.metrics.mape * 100).toFixed(1)}%</td>
+                                    <td className="px-4 sm:px-6 py-3 font-mono text-xs sm:text-sm">{res.metrics.msle?.toFixed(4) ?? 'N/A'}</td>
+                                    <td className="px-4 sm:px-6 py-3 font-mono text-xs sm:text-sm">{(res.metrics.r2 * 100).toFixed(1)}%</td>
                                     <td className="px-4 sm:px-6 py-3 font-mono text-xs sm:text-sm flex items-center gap-1">
                                       <Timer size={12} /> {res.metrics.execution_time.toFixed(1)}s
                                     </td>
@@ -1497,7 +1501,7 @@ export default function ForecastingPage() {
                                 {isBest && <Trophy size={14} className="text-amber-500" />}
                                 <span className="font-medium text-white text-sm">{res.model_name}</span>
                               </div>
-                              <div className="grid grid-cols-4 gap-2 text-xs">
+                              <div className="grid grid-cols-3 gap-2 text-xs mb-2">
                                 <div>
                                   <p className="text-slate-500">RMSE</p>
                                   <p className="font-mono text-white">{res.metrics.rmse.toFixed(1)}</p>
@@ -1509,6 +1513,16 @@ export default function ForecastingPage() {
                                 <div>
                                   <p className="text-slate-500">MAPE</p>
                                   <p className="font-mono text-white">{(res.metrics.mape * 100).toFixed(0)}%</p>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-3 gap-2 text-xs">
+                                <div>
+                                  <p className="text-slate-500">MSLE</p>
+                                  <p className="font-mono text-white">{res.metrics.msle?.toFixed(4) ?? 'N/A'}</p>
+                                </div>
+                                <div>
+                                  <p className="text-slate-500">R²</p>
+                                  <p className="font-mono text-white">{(res.metrics.r2 * 100).toFixed(0)}%</p>
                                 </div>
                                 <div>
                                   <p className="text-slate-500">Time</p>
@@ -1538,6 +1552,7 @@ export default function ForecastingPage() {
                             const minRmse = Math.min(...rmseValues);
                             const maxRmse = Math.max(...rmseValues);
                             const range = maxRmse - minRmse;
+                            const maxBarHeight = 48; // pixels (total height minus labels space)
                             
                             return (
                               <div key={res.model_id} className="space-y-2">
@@ -1546,19 +1561,20 @@ export default function ForecastingPage() {
                                 <div className="flex items-end gap-1 h-20 bg-black/20 rounded-lg p-2 pt-4">
                                   {horizonMetrics.map(hm => {
                                     // Scale from 20% (min) to 100% (max) to show differences clearly
-                                    const normalizedHeight = range > 0 
-                                      ? 20 + ((hm.rmse - minRmse) / range) * 80 
-                                      : 50;
+                                    const normalizedRatio = range > 0 
+                                      ? 0.2 + ((hm.rmse - minRmse) / range) * 0.8 
+                                      : 0.5;
+                                    const barHeight = Math.round(normalizedRatio * maxBarHeight);
                                     return (
                                       <div 
                                         key={hm.horizon_step}
-                                        className="flex-1 flex flex-col items-center justify-end"
+                                        className="flex-1 flex flex-col items-center justify-end h-full"
                                         title={`h=${hm.horizon_step}: RMSE=${hm.rmse.toFixed(2)}, MAE=${hm.mae.toFixed(2)}`}
                                       >
                                         <span className="text-[7px] text-slate-400 mb-0.5">{hm.rmse.toFixed(1)}</span>
                                         <div 
                                           className="w-full bg-gradient-to-t from-blue-500 to-blue-400 rounded-t transition-all"
-                                          style={{ height: `${normalizedHeight}%` }}
+                                          style={{ height: `${barHeight}px` }}
                                         />
                                         <span className="text-[8px] text-slate-500 mt-0.5">h{hm.horizon_step}</span>
                                       </div>
