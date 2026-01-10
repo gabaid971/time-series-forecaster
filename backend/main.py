@@ -518,12 +518,22 @@ def build_features(
     return df, feature_names
 
 
-def filter_by_date_range(df: pl.DataFrame, date_col: str, start: str, end: str) -> pl.DataFrame:
-    """Filter dataframe by date range."""
-    return df.filter(
-        (pl.col(date_col) >= pl.lit(start).str.to_datetime()) &
-        (pl.col(date_col) <= pl.lit(end).str.to_datetime())
-    )
+def filter_by_date_range(df: pl.DataFrame, date_col: str, start: str, end: str, inclusive_end: bool = True) -> pl.DataFrame:
+    """Filter dataframe by date range.
+    
+    Args:
+        inclusive_end: If True, uses <= for end. If False, uses < for end.
+    """
+    if inclusive_end:
+        return df.filter(
+            (pl.col(date_col) >= pl.lit(start).str.to_datetime()) &
+            (pl.col(date_col) <= pl.lit(end).str.to_datetime())
+        )
+    else:
+        return df.filter(
+            (pl.col(date_col) >= pl.lit(start).str.to_datetime()) &
+            (pl.col(date_col) < pl.lit(end).str.to_datetime())
+        )
 
 def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     """Calculate regression metrics."""
@@ -793,7 +803,7 @@ def train_lag(
     # Build training data
     train_dfs = []
     for tr in training_ranges:
-        range_df = filter_by_date_range(df_lagged, date_col, tr.start, tr.end)
+        range_df = filter_by_date_range(df_lagged, date_col, tr.start, tr.end, inclusive_end=False)
         train_dfs.append(range_df)
     
     train_df = pl.concat(train_dfs) if train_dfs else df_lagged.head(0)
@@ -972,7 +982,7 @@ def train_linear_regression(
     # Build training data from all training ranges
     train_dfs = []
     for tr in training_ranges:
-        chunk = filter_by_date_range(df_features, date_col, tr.start, tr.end)
+        chunk = filter_by_date_range(df_features, date_col, tr.start, tr.end, inclusive_end=False)
         train_dfs.append(chunk)
     
     if not train_dfs:
@@ -1363,7 +1373,7 @@ def train_xgboost(
     # Build training data
     train_dfs = []
     for tr in training_ranges:
-        chunk = filter_by_date_range(df_features, date_col, tr.start, tr.end)
+        chunk = filter_by_date_range(df_features, date_col, tr.start, tr.end, inclusive_end=False)
         train_dfs.append(chunk)
     
     if not train_dfs:
@@ -1518,11 +1528,18 @@ def train_arima(
     target_col: str,
     training_ranges: List[DateRange],
     prediction_ranges: List[DateRange],
-    params: Dict[str, Any]
+    params: Dict[str, Any],
+    horizon: int = 1
 ) -> Dict[str, Any]:
     """
-    Train an ARIMA model.
+    Train an ARIMA model with block-wise forecasting for fair horizon comparison.
     ARIMA is a univariate model - it only uses the target variable's history.
+    
+    Block-wise strategy:
+    - Split prediction range into blocks of size `horizon`
+    - For each block, forecast h steps ahead
+    - Assign horizon_step 1..h to each prediction
+    - Refit/update model between blocks (optional, here we just re-forecast)
     """
     start_time = time.time()
     
@@ -1534,7 +1551,7 @@ def train_arima(
     # Build training data
     train_dfs = []
     for tr in training_ranges:
-        chunk = filter_by_date_range(df, date_col, tr.start, tr.end)
+        chunk = filter_by_date_range(df, date_col, tr.start, tr.end, inclusive_end=False)
         train_dfs.append(chunk)
     
     if not train_dfs:
@@ -1546,14 +1563,14 @@ def train_arima(
     if len(y_train) < p + d + q + 5:
         raise ValueError(f"Not enough training data for ARIMA({p},{d},{q})")
     
-    # Fit ARIMA
+    # Fit ARIMA on training data
     try:
         model = ARIMA(y_train, order=(p, d, q))
         fitted = model.fit()
     except Exception as e:
         raise ValueError(f"ARIMA fitting failed: {e}")
     
-    # Predict on prediction ranges
+    # Predict on prediction ranges with block-wise horizon tracking
     all_predictions = []
     all_actuals = []
     forecast_output = []
@@ -1566,35 +1583,54 @@ def train_arima(
         
         y_actual = pred_df.select(target_col).to_numpy().flatten()
         dates = pred_df.select(date_col).to_series().to_list()
+        n_total = len(y_actual)
         
-        # For ARIMA, we need to forecast from the end of training
-        # Use in-sample predictions for overlapping periods, out-of-sample for future
-        n_forecast = len(y_actual)
+        # Block-wise forecasting
+        # We extend the history as we move through blocks
+        current_history = list(y_train)
         
-        try:
-            # Get forecasts
-            forecast = fitted.forecast(steps=n_forecast)
-            y_pred = np.array(forecast)
-        except Exception:
-            # Fallback: use last known value
-            y_pred = np.full(n_forecast, y_train[-1])
-        
-        all_predictions.extend(y_pred)
-        all_actuals.extend(y_actual)
-        
-        for date, pred_val, actual_val in zip(dates, y_pred, y_actual):
-            forecast_output.append({
-                date_col: date.isoformat() if hasattr(date, 'isoformat') else str(date),
-                "prediction": float(pred_val),
-                target_col: float(actual_val)
-            })
+        for block_start in range(0, n_total, horizon):
+            block_end = min(block_start + horizon, n_total)
+            block_size = block_end - block_start
+            
+            # Refit ARIMA with extended history for each block
+            try:
+                block_model = ARIMA(np.array(current_history), order=(p, d, q))
+                block_fitted = block_model.fit()
+                block_forecast = block_fitted.forecast(steps=block_size)
+                y_pred_block = np.array(block_forecast)
+            except Exception:
+                # Fallback: use last known value
+                y_pred_block = np.full(block_size, current_history[-1])
+            
+            # Add predictions with horizon_step
+            for i in range(block_size):
+                idx = block_start + i
+                horizon_step = i + 1  # 1-indexed within block
+                
+                all_predictions.append(y_pred_block[i])
+                all_actuals.append(y_actual[idx])
+                
+                forecast_output.append({
+                    date_col: dates[idx].isoformat() if hasattr(dates[idx], 'isoformat') else str(dates[idx]),
+                    "prediction": float(y_pred_block[i]),
+                    target_col: float(y_actual[idx]),
+                    "horizon_step": horizon_step
+                })
+            
+            # Extend history with actual values for next block
+            current_history.extend(y_actual[block_start:block_end])
     
     # Metrics
-    metrics = calculate_metrics(np.array(all_actuals), np.array(all_predictions)) if all_actuals else {"rmse": 0, "mae": 0, "mape": 0, "r2": 0}
+    metrics = calculate_metrics(np.array(all_actuals), np.array(all_predictions)) if all_actuals else {"rmse": 0, "mae": 0, "mape": 0, "r2": 0, "msle": 0}
     metrics["execution_time"] = time.time() - start_time
+    
+    # Calculate metrics by horizon
+    metrics_by_horizon = calculate_metrics_by_horizon(forecast_output, target_col) if forecast_output else []
     
     return {
         "metrics": metrics,
+        "metrics_by_horizon": metrics_by_horizon,
         "forecast": forecast_output,
         "feature_importance": None  # ARIMA doesn't have feature importance
     }
@@ -1621,9 +1657,9 @@ def train_prophet(
     yearly_seasonality = params.get("yearly_seasonality", True)
     seasonality_mode = params.get("seasonality_mode", "additive")
     
-    # Get lag regressors (new feature)
-    use_lag_regressors = params.get("use_lag_regressors", True)
-    lag_regressors = params.get("lag_regressors", [1, 7])
+    # Get lag regressors (disabled by default - frontend doesn't use them)
+    use_lag_regressors = params.get("use_lag_regressors", False)
+    lag_regressors = params.get("lag_regressors", [])
     if isinstance(lag_regressors, str):
         lag_regressors = [int(x.strip()) for x in lag_regressors.split(",")]
     
@@ -1642,7 +1678,7 @@ def train_prophet(
     # Build training data
     train_dfs = []
     for tr in training_ranges:
-        chunk = filter_by_date_range(df_with_lags, date_col, tr.start, tr.end)
+        chunk = filter_by_date_range(df_with_lags, date_col, tr.start, tr.end, inclusive_end=False)
         train_dfs.append(chunk)
     
     if not train_dfs:
@@ -1664,6 +1700,16 @@ def train_prophet(
     
     prophet_train = train_df.select(cols_to_select).to_pandas()
     
+    # Ensure ds is datetime with nanosecond precision (Prophet has issues with microseconds)
+    prophet_train['ds'] = pd.to_datetime(prophet_train['ds']).astype('datetime64[ns]')
+    
+    print(f"[DEBUG] Prophet train data: {len(prophet_train)} rows")
+    print(f"[DEBUG] Prophet train date range: {prophet_train['ds'].min()} to {prophet_train['ds'].max()}")
+    print(f"[DEBUG] Prophet train y stats: min={prophet_train['y'].min():.1f}, max={prophet_train['y'].max():.1f}, std={prophet_train['y'].std():.1f}")
+    print(f"[DEBUG] Prophet train ds dtype: {prophet_train['ds'].dtype}")
+    print(f"[DEBUG] Prophet train first 3 rows:")
+    print(prophet_train.head(3))
+    
     # Initialize Prophet
     model = Prophet(
         daily_seasonality=daily_seasonality,
@@ -1683,13 +1729,19 @@ def train_prophet(
     all_actuals = []
     forecast_output = []
     
+    print(f"[DEBUG] Prophet prediction_ranges count: {len(prediction_ranges)}")
+    
     for pr in prediction_ranges:
+        print(f"[DEBUG] Prophet processing range: {pr.start} to {pr.end}")
         pred_df = filter_by_date_range(df_with_lags, date_col, pr.start, pr.end).sort(date_col)
+        print(f"[DEBUG] Prophet pred_df after filter: {pred_df.height} rows")
         
         if regressor_names:
             pred_df = pred_df.drop_nulls(subset=regressor_names)
+            print(f"[DEBUG] Prophet pred_df after drop_nulls: {pred_df.height} rows")
         
         if pred_df.height == 0:
+            print("[DEBUG] Prophet pred_df is empty, skipping")
             continue
         
         y_actual = pred_df.select(target_col).to_numpy().flatten()
@@ -1702,8 +1754,20 @@ def train_prophet(
         
         future = pred_df.select(cols_for_future).to_pandas()
         
+        # Ensure ds is datetime with nanosecond precision (Prophet has issues with microseconds)
+        future['ds'] = pd.to_datetime(future['ds']).astype('datetime64[ns]')
+        
         forecast = model.predict(future)
         y_pred = forecast["yhat"].values
+        
+        print(f"[DEBUG] Prophet predictions: min={y_pred.min():.1f}, max={y_pred.max():.1f}, std={np.std(y_pred):.1f}")
+        print(f"[DEBUG] Prophet trend: min={forecast['trend'].min():.1f}, max={forecast['trend'].max():.1f}")
+        if 'weekly' in forecast.columns:
+            print(f"[DEBUG] Prophet weekly: min={forecast['weekly'].min():.1f}, max={forecast['weekly'].max():.1f}")
+        if 'yearly' in forecast.columns:
+            print(f"[DEBUG] Prophet yearly: min={forecast['yearly'].min():.1f}, max={forecast['yearly'].max():.1f}")
+        else:
+            print(f"[DEBUG] Prophet forecast columns: {list(forecast.columns)}")
         
         all_predictions.extend(y_pred)
         all_actuals.extend(y_actual)
@@ -1984,11 +2048,15 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
                         target_col=target_col,
                         training_ranges=request.data_config.training_ranges,
                         prediction_ranges=request.data_config.prediction_ranges,
-                        params=model_config.params
+                        params=model_config.params,
+                        horizon=request.data_config.forecast_strategy.horizon
                     )
                 elif model_config.type == "PROPHET":
                     if not PROPHET_AVAILABLE:
                         raise ValueError("Prophet is not installed on this server. Please use Linear Regression, XGBoost, or ARIMA instead.")
+                    print(f"[DEBUG] Prophet params: {model_config.params}")
+                    print(f"[DEBUG] Prophet training_ranges: {request.data_config.training_ranges}")
+                    print(f"[DEBUG] Prophet prediction_ranges: {request.data_config.prediction_ranges}")
                     result = train_prophet(
                         df=df,
                         date_col=date_col,
