@@ -602,25 +602,58 @@ export default function StrategyStep({
   onStartTraining
 }: StrategyStepProps) {
   
-  // Calculate max horizon based on validation window size
+  // Calculate max horizon based on actual data points in validation window
   const maxHorizon = useMemo(() => {
     if (predictionRanges.length === 0 || !predictionRanges[0].start || !predictionRanges[0].end) {
       return 30; // Default fallback
     }
     
-    // Calculate days in validation window
     try {
-      const start = new Date(predictionRanges[0].start);
-      const end = new Date(predictionRanges[0].end);
-      const diffTime = Math.abs(end.getTime() - start.getTime());
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      const startDate = new Date(predictionRanges[0].start);
+      const endDate = new Date(predictionRanges[0].end);
       
-      // Limit to at most the validation window size, but minimum 1, max 365
-      return Math.max(1, Math.min(365, diffDays));
+      // Count actual data points in the validation range
+      if (fullData && fullData.length > 0 && data?.dateColumn) {
+        const validationPoints = fullData.filter(row => {
+          const rowDate = new Date(row[data.dateColumn] as string);
+          return rowDate >= startDate && rowDate <= endDate;
+        }).length;
+        
+        if (validationPoints > 0) {
+          return Math.max(1, Math.min(365, validationPoints));
+        }
+      }
+      
+      // Fallback: estimate based on frequency if no data
+      const diffTime = Math.abs(endDate.getTime() - startDate.getTime());
+      const frequency = data?.frequency || 'D';
+      
+      let estimatedPoints: number;
+      switch (frequency) {
+        case 'min':
+          estimatedPoints = Math.ceil(diffTime / (1000 * 60));
+          break;
+        case 'H':
+          estimatedPoints = Math.ceil(diffTime / (1000 * 60 * 60));
+          break;
+        case 'D':
+          estimatedPoints = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          break;
+        case 'W':
+          estimatedPoints = Math.ceil(diffTime / (1000 * 60 * 60 * 24 * 7));
+          break;
+        case 'M':
+          estimatedPoints = Math.ceil(diffTime / (1000 * 60 * 60 * 24 * 30));
+          break;
+        default:
+          estimatedPoints = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      }
+      
+      return Math.max(1, Math.min(365, estimatedPoints));
     } catch {
       return 30;
     }
-  }, [predictionRanges]);
+  }, [predictionRanges, fullData, data?.dateColumn, data?.frequency]);
   
   return (
     <div className="flex flex-col lg:flex-row gap-4 h-full animate-in fade-in slide-in-from-bottom-4 duration-500 overflow-hidden">
@@ -785,7 +818,13 @@ export default function StrategyStep({
                 >
                   <ChevronDown size={10} className="-rotate-90" />
                 </button>
-                <span className="text-[9px] text-slate-500 ml-1">/ {maxHorizon}</span>
+                <button
+                  onClick={() => setForecastHorizon(maxHorizon)}
+                  className="text-[9px] text-slate-500 ml-1 hover:text-amber-400 transition-colors cursor-pointer"
+                  title="Set horizon to full validation window"
+                >
+                  / <span className="underline decoration-dotted">{maxHorizon}</span>
+                </button>
               </div>
             </div>
           </div>

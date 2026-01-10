@@ -121,18 +121,15 @@ export default function ForecastStrategyVisualizer({
         </div>
       </div>
 
-      {/* Two columns: ML models (with lags) and Statistical models */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-white/10">
-        
-        {/* Left: ML Models (with features/lags) */}
-        <div className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-6 h-6 rounded bg-amber-500/20 flex items-center justify-center">
-              <BarChart3 size={12} className="text-amber-400" />
-            </div>
-            <div>
-              <h5 className="text-xs font-semibold text-white">ML Models</h5>
-              <p className="text-[10px] text-slate-500">Lag, Linear Regression, XGBoost</p>
+      {/* ML Models Configuration */}
+      <div className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <div className="w-6 h-6 rounded bg-amber-500/20 flex items-center justify-center">
+            <BarChart3 size={12} className="text-amber-400" />
+          </div>
+          <div>
+            <h5 className="text-xs font-semibold text-white">Feature-based Models</h5>
+            <p className="text-[10px] text-slate-500">Lag, Linear Regression, XGBoost</p>
             </div>
             <div className={`ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold flex items-center gap-1 ${
               mlForecastMode === 'direct' 
@@ -323,86 +320,29 @@ export default function ForecastStrategyVisualizer({
           )}
         </div>
 
-        {/* Right: Statistical Models (no lags) */}
-        <div className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-6 h-6 rounded bg-blue-500/20 flex items-center justify-center">
-              <TrendingUp size={12} className="text-blue-400" />
-            </div>
-            <div>
-              <h5 className="text-xs font-semibold text-white">Statistical Models</h5>
-              <p className="text-[10px] text-slate-500">ARIMA, Prophet</p>
-            </div>
-            <div className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold flex items-center gap-1 bg-blue-500/20 text-blue-400 border border-blue-500/30">
-              <CheckCircle2 size={10} /> Direct
-            </div>
-          </div>
-
-          <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-2 sm:p-3 text-[10px] sm:text-[11px] text-blue-300 mb-3">
-            <p className="flex items-start gap-2">
-              <Info size={14} className="flex-shrink-0 mt-0.5 hidden sm:block" />
-              <span>
-                Predict all <strong>{horizon}</strong> steps directly using internal dynamics.
-              </span>
-            </p>
-          </div>
-
-          {/* Visual representation for statistical models - HARMONIZED with ML */}
-          <div className="bg-black/20 rounded-lg p-2 sm:p-3">
-            <div className="flex items-end gap-0.5 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-white/10">
-              {/* History - same displayData as ML for consistency */}
-              {displayData.map((val, idx) => {
-                // t goes from -(N-1) to 0, so last element is t=0 (present)
-                const t = idx - displayData.length + 1;
-                return (
-                  <div key={`sh-${idx}`} className="flex flex-col items-center flex-shrink-0">
-                    <div
-                      className="w-5 sm:w-6 rounded-t bg-slate-600/50"
-                      style={{ height: `${Math.max(14, (val / Math.max(...displayData)) * 36)}px` }}
-                    />
-                    <span className="text-[7px] sm:text-[8px] text-slate-600 mt-0.5">
-                      {t === 0 ? 't₀' : `t${t}`}
-                    </span>
-                  </div>
-                );
-              })}
-              
-              <div className="w-px h-10 bg-gradient-to-b from-blue-500 via-blue-500/50 to-transparent mx-0.5 flex-shrink-0" />
-              
-              {/* All predictions - truncate same as ML */}
-              {Array.from({ length: Math.min(horizon, maxVisiblePredictions) }, (_, h) => (
-                <div key={`sp-${h}`} className="flex flex-col items-center flex-shrink-0">
-                  <div
-                    className="w-5 sm:w-6 rounded-t bg-blue-500/40 border border-blue-500/50"
-                    style={{ height: '28px' }}
-                  />
-                  <span className="text-[7px] sm:text-[8px] text-blue-400 mt-0.5">t+{h + 1}</span>
-                </div>
-              ))}
-              {horizon > maxVisiblePredictions && (
-                <div className="flex flex-col items-center flex-shrink-0 px-1">
-                  <div className="text-blue-400 text-[10px]">...</div>
-                  <span className="text-[7px] text-slate-500 mt-0.5">+{horizon - maxVisiblePredictions}</span>
-                </div>
-              )}
-            </div>
-            
-            <div className="mt-2 p-2 bg-black/30 rounded text-[9px] sm:text-[10px] hidden sm:block">
-              <span className="text-blue-400">model.forecast</span>
-              <span className="text-slate-400">(h={horizon})</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Validation Explanation */}
-      <div className="px-3 sm:px-4 py-2.5 border-t border-white/10 bg-gradient-to-r from-slate-900/50 to-slate-800/30">
+      {/* Validation Explanation - Clearer */}
+      <div className="px-3 sm:px-4 py-3 border-t border-white/10 bg-gradient-to-r from-slate-900/50 to-slate-800/30">
         <div className="flex items-start gap-2">
-          <Info size={12} className="text-slate-500 flex-shrink-0 mt-0.5" />
-          <div className="text-[9px] sm:text-[10px] text-slate-500">
-            <span className="text-slate-400 font-medium">Validation:</span>{' '}
-            Predictions are made in blocks of <span className="text-amber-400 font-mono">{horizon}</span> steps.
-            Within each block, ML models use recursive predictions; between blocks, they reset to actual values.
+          <Info size={12} className="text-amber-500 flex-shrink-0 mt-0.5" />
+          <div className="text-[10px] sm:text-[11px] text-slate-400 space-y-1">
+            <p>
+              <span className="text-white font-medium">How validation works:</span>
+            </p>
+            <p>
+              The model is trained <span className="text-emerald-400">once</span> on the training period.
+              Then the validation period is split into blocks of <span className="text-amber-400 font-mono">{horizon}</span> steps.
+            </p>
+            {horizon > 1 && minLag < horizon && (
+              <p className="text-amber-300/80">
+                Within each block, predictions beyond step {minLag} use previous predictions as inputs (recursive).
+                At the start of each new block, inputs reset to actual historical values.
+              </p>
+            )}
+            {(horizon === 1 || minLag >= horizon) && (
+              <p className="text-emerald-300/80">
+                Each prediction uses only actual historical values (no recursive dependency).
+              </p>
+            )}
           </div>
         </div>
       </div>

@@ -1521,59 +1521,59 @@ export default function ForecastingPage() {
                       })()}
                     </div>
 
-                    {/* Horizon Metrics Section - Only show if multi-step forecasting was used */}
+                    {/* Horizon Metrics Section - Collapsible, collapsed by default */}
                     {results.some(r => r.metrics_by_horizon && r.metrics_by_horizon.length > 1) && (
-                      <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
-                        <div className="p-3 sm:p-4 border-b border-white/10">
+                      <details className="bg-white/5 border border-white/10 rounded-xl overflow-hidden group">
+                        <summary className="p-3 sm:p-4 cursor-pointer hover:bg-white/5 transition-colors flex items-center justify-between">
                           <h3 className="font-semibold text-sm sm:text-base text-white flex items-center gap-2">
                             <TrendingUp size={16} className="text-blue-400" />
                             Metrics by Horizon Step
                           </h3>
-                          <p className="text-xs text-slate-500 mt-1">
-                            Error breakdown for each step ahead in the forecast (h=1 is 1 step ahead, h=2 is 2 steps ahead, etc.)
-                          </p>
-                        </div>
-                        <div className="p-3 sm:p-4 space-y-4">
+                          <ChevronDown size={16} className="text-slate-400 group-open:rotate-180 transition-transform" />
+                        </summary>
+                        <div className="p-3 sm:p-4 border-t border-white/10 space-y-4">
                           {results.filter(r => r.metrics_by_horizon && r.metrics_by_horizon.length > 1 && !r.error).map(res => {
                             const horizonMetrics = res.metrics_by_horizon!;
-                            const maxRmse = Math.max(...horizonMetrics.map(h => h.rmse));
+                            const rmseValues = horizonMetrics.map(h => h.rmse);
+                            const minRmse = Math.min(...rmseValues);
+                            const maxRmse = Math.max(...rmseValues);
+                            const range = maxRmse - minRmse;
                             
                             return (
                               <div key={res.model_id} className="space-y-2">
                                 <h4 className="text-sm font-medium text-slate-300">{res.model_name}</h4>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                                {/* Compact horizontal bar chart with amplified scale */}
+                                <div className="flex items-end gap-1 h-20 bg-black/20 rounded-lg p-2 pt-4">
                                   {horizonMetrics.map(hm => {
-                                    const rmsePercent = (hm.rmse / maxRmse) * 100;
-                                    const isLast = hm.horizon_step === horizonMetrics.length;
-                                    
+                                    // Scale from 20% (min) to 100% (max) to show differences clearly
+                                    const normalizedHeight = range > 0 
+                                      ? 20 + ((hm.rmse - minRmse) / range) * 80 
+                                      : 50;
                                     return (
                                       <div 
-                                        key={hm.horizon_step} 
-                                        className={`bg-black/20 rounded-lg p-2.5 border ${isLast ? 'border-amber-500/30' : 'border-white/5'}`}
+                                        key={hm.horizon_step}
+                                        className="flex-1 flex flex-col items-center justify-end"
+                                        title={`h=${hm.horizon_step}: RMSE=${hm.rmse.toFixed(2)}, MAE=${hm.mae.toFixed(2)}`}
                                       >
-                                        <div className="flex items-center justify-between mb-1.5">
-                                          <span className="text-xs font-medium text-white">h = {hm.horizon_step}</span>
-                                          <span className="text-[10px] text-slate-500">{hm.count} samples</span>
-                                        </div>
-                                        <div className="h-1.5 bg-white/10 rounded-full mb-1.5 overflow-hidden">
-                                          <div 
-                                            className="h-full bg-gradient-to-r from-blue-500 to-blue-400 rounded-full transition-all"
-                                            style={{ width: `${rmsePercent}%` }}
-                                          />
-                                        </div>
-                                        <div className="flex justify-between text-[10px]">
-                                          <span className="text-slate-400">RMSE: <span className="text-white font-mono">{hm.rmse.toFixed(2)}</span></span>
-                                          <span className="text-slate-400">MAE: <span className="text-white font-mono">{hm.mae.toFixed(2)}</span></span>
-                                        </div>
+                                        <span className="text-[7px] text-slate-400 mb-0.5">{hm.rmse.toFixed(1)}</span>
+                                        <div 
+                                          className="w-full bg-gradient-to-t from-blue-500 to-blue-400 rounded-t transition-all"
+                                          style={{ height: `${normalizedHeight}%` }}
+                                        />
+                                        <span className="text-[8px] text-slate-500 mt-0.5">h{hm.horizon_step}</span>
                                       </div>
                                     );
                                   })}
+                                </div>
+                                <div className="flex justify-between text-[10px] text-slate-500">
+                                  <span>h=1: RMSE {horizonMetrics[0]?.rmse.toFixed(2)}</span>
+                                  <span>h={horizonMetrics.length}: RMSE {horizonMetrics[horizonMetrics.length - 1]?.rmse.toFixed(2)}</span>
                                 </div>
                               </div>
                             );
                           })}
                         </div>
-                      </div>
+                      </details>
                     )}
 
                     {/* Feature Importance Section */}

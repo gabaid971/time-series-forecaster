@@ -1099,11 +1099,15 @@ def train_linear_regression(
         metrics_by_horizon = calculate_metrics_by_horizon(forecast_output, target_col)
     
     # Extract feature importance (coefficients for Linear Regression)
+    # Normalize by sum of absolute values so they represent relative contribution
     feature_importance = []
-    for feat_name, coef in zip(feature_names, model.coef_):
+    abs_coefs = [abs(coef) for coef in model.coef_]
+    total_abs = sum(abs_coefs) if sum(abs_coefs) > 0 else 1.0
+    
+    for feat_name, abs_coef in zip(feature_names, abs_coefs):
         feature_importance.append({
             "feature": feat_name,
-            "importance": float(abs(coef))  # Use absolute value for importance
+            "importance": float(abs_coef / total_abs)  # Normalized to sum to 1
         })
     # Sort by importance descending
     feature_importance.sort(key=lambda x: x["importance"], reverse=True)
