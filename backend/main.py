@@ -1586,22 +1586,19 @@ def train_arima(
         n_total = len(y_actual)
         
         # Block-wise forecasting
-        # We extend the history as we move through blocks
-        current_history = list(y_train)
+        # Use the fitted model and update with new observations (faster than refitting)
+        current_fitted = fitted
         
         for block_start in range(0, n_total, horizon):
             block_end = min(block_start + horizon, n_total)
             block_size = block_end - block_start
             
-            # Refit ARIMA with extended history for each block
             try:
-                block_model = ARIMA(np.array(current_history), order=(p, d, q))
-                block_fitted = block_model.fit()
-                block_forecast = block_fitted.forecast(steps=block_size)
+                block_forecast = current_fitted.forecast(steps=block_size)
                 y_pred_block = np.array(block_forecast)
             except Exception:
-                # Fallback: use last known value
-                y_pred_block = np.full(block_size, current_history[-1])
+                # Fallback: use last known value from training
+                y_pred_block = np.full(block_size, y_train[-1])
             
             # Add predictions with horizon_step
             for i in range(block_size):
@@ -1618,8 +1615,12 @@ def train_arima(
                     "horizon_step": horizon_step
                 })
             
-            # Extend history with actual values for next block
-            current_history.extend(y_actual[block_start:block_end])
+            # Update model with actual observations for next block (fast update, no refit)
+            try:
+                current_fitted = current_fitted.append(y_actual[block_start:block_end], refit=False)
+            except Exception:
+                # If append fails, continue with current model
+                pass
     
     # Metrics
     metrics = calculate_metrics(np.array(all_actuals), np.array(all_predictions)) if all_actuals else {"rmse": 0, "mae": 0, "mape": 0, "r2": 0, "msle": 0}
@@ -1703,13 +1704,6 @@ def train_prophet(
     # Ensure ds is datetime with nanosecond precision (Prophet has issues with microseconds)
     prophet_train['ds'] = pd.to_datetime(prophet_train['ds']).astype('datetime64[ns]')
     
-    print(f"[DEBUG] Prophet train data: {len(prophet_train)} rows")
-    print(f"[DEBUG] Prophet train date range: {prophet_train['ds'].min()} to {prophet_train['ds'].max()}")
-    print(f"[DEBUG] Prophet train y stats: min={prophet_train['y'].min():.1f}, max={prophet_train['y'].max():.1f}, std={prophet_train['y'].std():.1f}")
-    print(f"[DEBUG] Prophet train ds dtype: {prophet_train['ds'].dtype}")
-    print(f"[DEBUG] Prophet train first 3 rows:")
-    print(prophet_train.head(3))
-    
     # Initialize Prophet
     model = Prophet(
         daily_seasonality=daily_seasonality,
@@ -1729,19 +1723,13 @@ def train_prophet(
     all_actuals = []
     forecast_output = []
     
-    print(f"[DEBUG] Prophet prediction_ranges count: {len(prediction_ranges)}")
-    
     for pr in prediction_ranges:
-        print(f"[DEBUG] Prophet processing range: {pr.start} to {pr.end}")
         pred_df = filter_by_date_range(df_with_lags, date_col, pr.start, pr.end).sort(date_col)
-        print(f"[DEBUG] Prophet pred_df after filter: {pred_df.height} rows")
         
         if regressor_names:
             pred_df = pred_df.drop_nulls(subset=regressor_names)
-            print(f"[DEBUG] Prophet pred_df after drop_nulls: {pred_df.height} rows")
         
         if pred_df.height == 0:
-            print("[DEBUG] Prophet pred_df is empty, skipping")
             continue
         
         y_actual = pred_df.select(target_col).to_numpy().flatten()
@@ -1759,15 +1747,6 @@ def train_prophet(
         
         forecast = model.predict(future)
         y_pred = forecast["yhat"].values
-        
-        print(f"[DEBUG] Prophet predictions: min={y_pred.min():.1f}, max={y_pred.max():.1f}, std={np.std(y_pred):.1f}")
-        print(f"[DEBUG] Prophet trend: min={forecast['trend'].min():.1f}, max={forecast['trend'].max():.1f}")
-        if 'weekly' in forecast.columns:
-            print(f"[DEBUG] Prophet weekly: min={forecast['weekly'].min():.1f}, max={forecast['weekly'].max():.1f}")
-        if 'yearly' in forecast.columns:
-            print(f"[DEBUG] Prophet yearly: min={forecast['yearly'].min():.1f}, max={forecast['yearly'].max():.1f}")
-        else:
-            print(f"[DEBUG] Prophet forecast columns: {list(forecast.columns)}")
         
         all_predictions.extend(y_pred)
         all_actuals.extend(y_actual)
@@ -2054,9 +2033,6 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
                 elif model_config.type == "PROPHET":
                     if not PROPHET_AVAILABLE:
                         raise ValueError("Prophet is not installed on this server. Please use Linear Regression, XGBoost, or ARIMA instead.")
-                    print(f"[DEBUG] Prophet params: {model_config.params}")
-                    print(f"[DEBUG] Prophet training_ranges: {request.data_config.training_ranges}")
-                    print(f"[DEBUG] Prophet prediction_ranges: {request.data_config.prediction_ranges}")
                     result = train_prophet(
                         df=df,
                         date_col=date_col,
