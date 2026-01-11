@@ -9,3 +9,6 @@ xgboost
 statsmodels
 shap
 prophet
+# Testing
+pytest
+httpx

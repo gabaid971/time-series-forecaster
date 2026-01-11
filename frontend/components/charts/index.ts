@@ -1,0 +1,1 @@
+export { ShapChart } from './ShapChart';
