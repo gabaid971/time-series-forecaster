@@ -1,6 +1,6 @@
 """
 Time Series Forecaster Backend
-Simple, readable API with Polars + scikit-learn
+Refactored: modular structure with clean separation of concerns.
 """
 
 import os
@@ -11,15 +11,27 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import polars as pl
 import numpy as np
-from sklearn.linear_model import LinearRegression
-import xgboost as xgb
-from statsmodels.tsa.arima.model import ARIMA
-import time
-from datetime import datetime
 import warnings
-warnings.filterwarnings('ignore')  # Suppress Prophet/statsmodels warnings
+import pandas as pd
+warnings.filterwarnings('ignore')
 
-# Optional Prophet import (heavy dependency)
+# Import modular components
+from utils.date_utils import detect_frequency, parse_dates_flexible, filter_by_date_range
+from utils.features import (
+    FeatureConfig, 
+    TemporalFeatureConfig, 
+    ExogenousFeatureConfig, 
+    DerivedFeatureConfig
+)
+from models import (
+    train_lag,
+    train_linear_regression,
+    train_xgboost,
+    train_arima,
+    train_prophet
+)
+
+# Check Prophet availability
 try:
     from prophet import Prophet
     PROPHET_AVAILABLE = True
@@ -43,10 +55,10 @@ class DateRange(BaseModel):
 
 class ForecastStrategyConfig(BaseModel):
     """Configuration for multi-step forecasting."""
-    horizon: int = 1                    # Number of steps to forecast ahead
-    mode: str = "direct"                # 'direct' or 'recursive'
-    sliding_window: Optional[bool] = False  # Whether to use sliding window validation
-    window_size: Optional[int] = None   # Size of sliding window (if enabled)
+    horizon: int = 1
+    mode: str = "direct"
+    sliding_window: Optional[bool] = False
+    window_size: Optional[int] = None
 
 class DataConfig(BaseModel):
     target_column: str
@@ -58,7 +70,7 @@ class DataConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     id: str
-    type: str  # LINEAR_REGRESSION, XGBOOST, ARIMA, etc.
+    type: str
     name: str
     params: Dict[str, Any]
 
@@ -82,7 +94,7 @@ class HorizonMetrics(BaseModel):
     mae: float
     mape: float
     msle: float
-    count: int  # Number of predictions at this horizon
+    count: int
 
 class FeatureImportance(BaseModel):
     feature: str
@@ -93,26 +105,25 @@ class ModelResult(BaseModel):
     model_name: str
     metrics: ModelMetrics
     forecast: List[Dict[str, Any]]
-    metrics_by_horizon: Optional[List[HorizonMetrics]] = None  # Per-step metrics
+    metrics_by_horizon: Optional[List[HorizonMetrics]] = None
     feature_importance: Optional[List[FeatureImportance]] = None
-    shap_analysis: Optional[Dict[str, Any]] = None  # SHAP values for XGBoost
-    error: Optional[str] = None  # Error message if model training failed
+    shap_analysis: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
 
 class TrainingResponse(BaseModel):
     status: str
     results: List[ModelResult]
     message: Optional[str] = None
 
-# Schema for dataset analysis
+# Dataset analysis schemas
 class DatasetAnalysisRequest(BaseModel):
     data: List[Dict[str, Any]]
     date_column: str
     target_column: str
 
 class ColumnInfo(BaseModel):
-    """Information about a column in the dataset."""
     name: str
-    dtype: str  # "numeric", "string", "date", "boolean"
+    dtype: str
     missing_count: int
     sample_values: List[Any]
 
@@ -120,8 +131,8 @@ class DatasetStats(BaseModel):
     date_min: str
     date_max: str
     total_rows: int
-    frequency: str  # "D", "W", "M", "H", "min", "irregular"
-    frequency_label: str  # Human readable: "Daily", "Weekly", etc.
+    frequency: str
+    frequency_label: str
     missing_dates: int
     missing_values_target: int
     value_min: float
@@ -129,1660 +140,30 @@ class DatasetStats(BaseModel):
     value_mean: float
 
 class NormalizedDataPoint(BaseModel):
-    """A single data point with normalized date (ISO format) and value."""
-    date: str  # ISO format YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS
+    date: str
     value: float
 
 class DatasetAnalysisResponse(BaseModel):
     status: str
     stats: Optional[DatasetStats] = None
-    normalized_data: Optional[List[NormalizedDataPoint]] = None  # Clean data for frontend
-    available_columns: Optional[List[ColumnInfo]] = None  # Exogenous columns info
+    normalized_data: Optional[List[NormalizedDataPoint]] = None
+    available_columns: Optional[List[ColumnInfo]] = None
     message: Optional[str] = None
-
-# Schema for feature configuration
-class ExogenousFeatureConfig(BaseModel):
-    """Configuration for a single exogenous feature."""
-    column: str
-    lags: List[int] = []           # Lag values to create (e.g., [1, 7])
-    use_actual: bool = False       # Use actual value at prediction time
-    delta_lag: Optional[int] = None  # Compute delta vs this lag
-    pct_change_lag: Optional[int] = None  # Compute % change vs this lag
-
-class DerivedFeatureConfig(BaseModel):
-    """Configuration for derived features (operations between columns)."""
-    operation: str  # "sum", "product", "ratio", "difference"
-    feature_a: str  # Name of first feature (column name)
-    feature_b: str  # Name of second feature (column name)
-    alias: Optional[str] = None
-
-class TemporalFeatureConfig(BaseModel):
-    """Configuration for temporal features extracted from date."""
-    month: bool = False        # Month (1-12), cyclical encoded
-    day_of_week: bool = False  # Day of week (0-6), cyclical encoded
-    day_of_month: bool = False # Day of month (1-31)
-    week_of_year: bool = False # Week of year (1-52)
-    year: bool = False         # Year as numeric
-    hour_of_day: bool = False  # Hour of day (0-23), cyclical encoded
-    minute_of_day: bool = False # Minute of day (0-1439), cyclical encoded
-
-class FeatureConfig(BaseModel):
-    """Complete feature configuration for model training."""
-    target_lags: List[int] = [1, 7]  # Lags of target variable
-    temporal: TemporalFeatureConfig = TemporalFeatureConfig()
-    exogenous: List[ExogenousFeatureConfig] = []
-    derived: List[DerivedFeatureConfig] = []
 
 # ============================================================================
 # FASTAPI APP
 # ============================================================================
 
-app = FastAPI(title="Time Series Forecaster API", version="1.0.0")
+app = FastAPI(title="Time Series Forecaster API", version="2.0.0")
 
-# CORS : origines autorisées (séparées par virgule dans la variable d'environnement)
-# Ex: ALLOWED_ORIGINS="https://time-series-forecaster.vercel.app,http://localhost:3000"
-allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "*")
-if allowed_origins_env == "*":
-    allowed_origins = ["*"]
-else:
-    allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
-
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "X-API-Key"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
-def detect_frequency(df: pl.DataFrame, date_col: str) -> tuple[str, str, int]:
-    """
-    Detect the frequency of a time series.
-    Returns: (frequency_code, frequency_label, missing_dates_count)
-    """
-    if df.height < 2:
-        return "unknown", "Unknown", 0
-    
-    # Get sorted dates
-    dates = df.sort(date_col).select(date_col).to_series()
-    
-    # Calculate differences between consecutive dates
-    diffs = dates.diff().drop_nulls()
-    
-    if len(diffs) == 0:
-        return "unknown", "Unknown", 0
-    
-    # Get the most common difference (mode)
-    # Convert to total seconds for comparison
-    diff_seconds = [d.total_seconds() for d in diffs.to_list()]
-    
-    # Find the median difference (more robust than mode for irregular data)
-    median_diff = np.median(diff_seconds)
-    
-    # Classify frequency based on median difference
-    MINUTE = 60
-    HOUR = 3600
-    DAY = 86400
-    WEEK = 7 * DAY
-    MONTH = 30 * DAY  # Approximate
-    
-    if median_diff < MINUTE:
-        freq_code, freq_label = "s", "Secondly"
-        expected_diff = median_diff
-    elif median_diff < HOUR:
-        freq_code, freq_label = "min", "Minutely"
-        expected_diff = round(median_diff / MINUTE) * MINUTE
-    elif median_diff < DAY:
-        freq_code, freq_label = "H", "Hourly"
-        expected_diff = round(median_diff / HOUR) * HOUR
-    elif median_diff < WEEK:
-        freq_code, freq_label = "D", "Daily"
-        expected_diff = DAY
-    elif median_diff < MONTH:
-        freq_code, freq_label = "W", "Weekly"
-        expected_diff = WEEK
-    else:
-        freq_code, freq_label = "M", "Monthly"
-        expected_diff = MONTH
-    
-    # Count missing dates (gaps larger than expected)
-    tolerance = expected_diff * 1.5
-    missing_count = sum(1 for d in diff_seconds if d > tolerance)
-    
-    return freq_code, freq_label, missing_count
-
-
-def parse_dates_flexible(df: pl.DataFrame, date_col: str) -> pl.DataFrame:
-    """
-    Parse dates with intelligent format detection.
-    Analyzes the data to determine if format is M/D/Y or D/M/Y.
-    """
-    original_len = len(df)
-    
-    # Get sample of date strings for analysis
-    date_strings = df.select(pl.col(date_col).cast(pl.Utf8)).to_series().to_list()[:100]
-    
-    # Analyze to detect format
-    def detect_date_format(samples: list) -> str:
-        """
-        Detect whether dates are M/D/Y or D/M/Y by looking for values > 12.
-        If first part ever > 12, it must be day (D/M/Y).
-        If second part ever > 12, it must be day (M/D/Y).
-        """
-        first_parts = []
-        second_parts = []
-        
-        for s in samples:
-            if not s:
-                continue
-            s = str(s).strip()
-            
-            # Try to split by common separators
-            for sep in ['/', '-', '.']:
-                if sep in s:
-                    parts = s.split(sep)
-                    if len(parts) >= 2:
-                        try:
-                            first_parts.append(int(parts[0]))
-                            second_parts.append(int(parts[1]))
-                        except ValueError:
-                            pass
-                    break
-        
-        if not first_parts or not second_parts:
-            return None
-        
-        max_first = max(first_parts)
-        max_second = max(second_parts)
-        
-        # If first part ever > 12, it's day first (D/M/Y)
-        if max_first > 12:
-            return "DMY"
-        # If second part ever > 12, it's month first (M/D/Y)
-        if max_second > 12:
-            return "MDY"
-        # Ambiguous - default to M/D/Y (US format) for common datasets
-        return "MDY"
-    
-    detected_format = detect_date_format(date_strings)
-    print(f"Detected date format: {detected_format}")
-    
-    # Define format lists based on detection
-    if detected_format == "DMY":
-        date_formats = [
-            "%d/%m/%Y",
-            "%d-%m-%Y",
-            "%d.%m.%Y",
-            "%Y-%m-%d",
-        ]
-    else:  # MDY or unknown
-        date_formats = [
-            "%m/%d/%Y",
-            "%m-%d-%Y",
-            "%Y-%m-%d",
-            "%d/%m/%Y",  # Fallback
-        ]
-    
-    # Try each format and pick the one with most successful parses
-    best_df = None
-    best_success_count = 0
-    best_format = None
-    
-    for fmt in date_formats:
-        try:
-            test_df = df.with_columns(
-                pl.col(date_col).cast(pl.Utf8).str.strip_chars().str.to_date(fmt, strict=False).cast(pl.Datetime)
-            )
-            success_count = original_len - test_df[date_col].null_count()
-            
-            print(f"Format {fmt}: {success_count}/{original_len} rows parsed")
-            
-            if success_count > best_success_count:
-                best_success_count = success_count
-                best_df = test_df
-                best_format = fmt
-        except Exception as e:
-            print(f"Format {fmt} failed: {e}")
-            continue
-    
-    # Also try automatic parsing
-    try:
-        test_df = df.with_columns(
-            pl.col(date_col).str.to_datetime(strict=False)
-        )
-        success_count = original_len - test_df[date_col].null_count()
-        print(f"Auto parsing: {success_count}/{original_len} rows parsed")
-        
-        if success_count > best_success_count:
-            best_success_count = success_count
-            best_df = test_df
-            best_format = "auto"
-    except Exception:
-        pass
-    
-    if best_df is None or best_success_count == 0:
-        raise ValueError(f"Could not parse date column '{date_col}'")
-    
-    print(f"Best format: {best_format} with {best_success_count}/{original_len} rows")
-    return best_df
-
-
-def build_features(
-    df: pl.DataFrame,
-    date_col: str,
-    target_col: str,
-    feature_config: FeatureConfig
-) -> tuple[pl.DataFrame, List[str]]:
-    """
-    Build all features for model training.
-    
-    Returns:
-        - DataFrame with all features added
-        - List of feature column names (for model training)
-    """
-    feature_names = []
-    
-    # 1. Target lags
-    for lag in feature_config.target_lags:
-        col_name = f"target_lag_{lag}"
-        df = df.with_columns(
-            pl.col(target_col).shift(lag).alias(col_name)
-        )
-        feature_names.append(col_name)
-    
-    # 2. Temporal features (from date column)
-    temporal = feature_config.temporal
-    
-    if temporal.month:
-        # Cyclical encoding: sin and cos for month (1-12)
-        df = df.with_columns([
-            (2 * np.pi * pl.col(date_col).dt.month() / 12).sin().alias("month_sin"),
-            (2 * np.pi * pl.col(date_col).dt.month() / 12).cos().alias("month_cos"),
-        ])
-        feature_names.extend(["month_sin", "month_cos"])
-    
-    if temporal.day_of_week:
-        # Cyclical encoding: sin and cos for day of week (0-6)
-        df = df.with_columns([
-            (2 * np.pi * pl.col(date_col).dt.weekday() / 7).sin().alias("dow_sin"),
-            (2 * np.pi * pl.col(date_col).dt.weekday() / 7).cos().alias("dow_cos"),
-        ])
-        feature_names.extend(["dow_sin", "dow_cos"])
-    
-    if temporal.day_of_month:
-        df = df.with_columns(
-            pl.col(date_col).dt.day().alias("day_of_month")
-        )
-        feature_names.append("day_of_month")
-    
-    if temporal.week_of_year:
-        df = df.with_columns(
-            pl.col(date_col).dt.week().alias("week_of_year")
-        )
-        feature_names.append("week_of_year")
-    
-    if temporal.year:
-        df = df.with_columns(
-            pl.col(date_col).dt.year().alias("year")
-        )
-        feature_names.append("year")
-    
-    if temporal.hour_of_day:
-        # Cyclical encoding: sin and cos for hour of day (0-23)
-        df = df.with_columns([
-            (2 * np.pi * pl.col(date_col).dt.hour() / 24).sin().alias("hour_sin"),
-            (2 * np.pi * pl.col(date_col).dt.hour() / 24).cos().alias("hour_cos"),
-        ])
-        feature_names.extend(["hour_sin", "hour_cos"])
-    
-    if temporal.minute_of_day:
-        # Cyclical encoding: sin and cos for minute of day (0-1439)
-        # minute_of_day = hour * 60 + minute
-        df = df.with_columns([
-            (2 * np.pi * (pl.col(date_col).dt.hour() * 60 + pl.col(date_col).dt.minute()) / 1440).sin().alias("minute_of_day_sin"),
-            (2 * np.pi * (pl.col(date_col).dt.hour() * 60 + pl.col(date_col).dt.minute()) / 1440).cos().alias("minute_of_day_cos"),
-        ])
-        feature_names.extend(["minute_of_day_sin", "minute_of_day_cos"])
-    
-    # 3. Exogenous features
-    for exog in feature_config.exogenous:
-        col = exog.column
-        
-        # Skip if column doesn't exist
-        if col not in df.columns:
-            print(f"Warning: exogenous column '{col}' not found, skipping")
-            continue
-        
-        # Lags of exogenous variable
-        for lag in exog.lags:
-            col_name = f"{col}_lag_{lag}"
-            df = df.with_columns(
-                pl.col(col).shift(lag).alias(col_name)
-            )
-            feature_names.append(col_name)
-        
-        # Actual value (for features known at prediction time, e.g., planned promotions)
-        if exog.use_actual:
-            col_name = f"{col}_actual"
-            df = df.with_columns(
-                pl.col(col).alias(col_name)
-            )
-            feature_names.append(col_name)
-        
-        # Delta (difference vs lag)
-        if exog.delta_lag is not None:
-            col_name = f"{col}_delta_{exog.delta_lag}"
-            df = df.with_columns(
-                (pl.col(col) - pl.col(col).shift(exog.delta_lag)).alias(col_name)
-            )
-            feature_names.append(col_name)
-        
-        # Percentage change vs lag
-        if exog.pct_change_lag is not None:
-            col_name = f"{col}_pct_{exog.pct_change_lag}"
-            df = df.with_columns(
-                ((pl.col(col) - pl.col(col).shift(exog.pct_change_lag)) / 
-                 pl.col(col).shift(exog.pct_change_lag).abs().clip(lower_bound=1e-10)).alias(col_name)
-            )
-            feature_names.append(col_name)
-    
-    # 4. Derived features (operations between existing features)
-    for derived in feature_config.derived:
-        col_a = derived.feature_a
-        col_b = derived.feature_b
-        
-        # Check if columns exist
-        if col_a not in df.columns or col_b not in df.columns:
-            print(f"Warning: derived feature columns '{col_a}' or '{col_b}' not found, skipping")
-            continue
-            
-        alias = derived.alias or f"{col_a}_{derived.operation}_{col_b}"
-        
-        if derived.operation == "sum":
-            df = df.with_columns((pl.col(col_a) + pl.col(col_b)).alias(alias))
-        elif derived.operation == "difference":
-            df = df.with_columns((pl.col(col_a) - pl.col(col_b)).alias(alias))
-        elif derived.operation == "product":
-            df = df.with_columns((pl.col(col_a) * pl.col(col_b)).alias(alias))
-        elif derived.operation == "ratio":
-            df = df.with_columns(
-                (pl.col(col_a) / pl.col(col_b).abs().clip(lower_bound=1e-10)).alias(alias)
-            )
-        
-        feature_names.append(alias)
-    
-    return df, feature_names
-
-
-def filter_by_date_range(df: pl.DataFrame, date_col: str, start: str, end: str, inclusive_end: bool = True) -> pl.DataFrame:
-    """Filter dataframe by date range.
-    
-    Args:
-        inclusive_end: If True, uses <= for end. If False, uses < for end.
-    """
-    if inclusive_end:
-        return df.filter(
-            (pl.col(date_col) >= pl.lit(start).str.to_datetime()) &
-            (pl.col(date_col) <= pl.lit(end).str.to_datetime())
-        )
-    else:
-        return df.filter(
-            (pl.col(date_col) >= pl.lit(start).str.to_datetime()) &
-            (pl.col(date_col) < pl.lit(end).str.to_datetime())
-        )
-
-def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
-    """Calculate regression metrics."""
-    y_true = np.array(y_true).flatten()
-    y_pred = np.array(y_pred).flatten()
-    
-    rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
-    mae = np.mean(np.abs(y_true - y_pred))
-    
-    # MAPE (avoid division by zero)
-    mask = y_true != 0
-    if mask.sum() > 0:
-        mape = np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask]))
-    else:
-        mape = 0.0
-    
-    # R2
-    ss_res = np.sum((y_true - y_pred) ** 2)
-    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
-    r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
-    
-    # MSLE (Mean Squared Log Error) - only for positive values
-    mask_positive = (y_true > 0) & (y_pred > 0)
-    if mask_positive.sum() > 0:
-        msle = np.mean((np.log1p(y_true[mask_positive]) - np.log1p(y_pred[mask_positive])) ** 2)
-    else:
-        msle = 0.0
-    
-    return {"rmse": rmse, "mae": mae, "mape": mape, "r2": r2, "msle": msle}
-
-
-def calculate_metrics_by_horizon(forecasts: List[Dict[str, Any]], target_col: str) -> List[Dict[str, Any]]:
-    """
-    Calculate metrics grouped by horizon step.
-    
-    Args:
-        forecasts: List of forecast dicts with 'prediction', target_col, and 'horizon_step'
-        target_col: Name of the actual value column
-    
-    Returns:
-        List of {horizon_step, rmse, mae, mape, count} dicts
-    """
-    from collections import defaultdict
-    
-    # Group by horizon step
-    by_horizon = defaultdict(list)
-    for f in forecasts:
-        h = f.get("horizon_step", 1)
-        actual = f.get(target_col)
-        pred = f.get("prediction")
-        if actual is not None and pred is not None:
-            by_horizon[h].append((float(actual), float(pred)))
-    
-    metrics_list = []
-    for h in sorted(by_horizon.keys()):
-        pairs = by_horizon[h]
-        if len(pairs) == 0:
-            continue
-        
-        y_true = np.array([p[0] for p in pairs])
-        y_pred = np.array([p[1] for p in pairs])
-        
-        rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
-        mae = float(np.mean(np.abs(y_true - y_pred)))
-        
-        # MAPE
-        mask = y_true != 0
-        if mask.sum() > 0:
-            mape = float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])))
-        else:
-            mape = 0.0
-        
-        # MSLE (Mean Squared Log Error) - only for positive values
-        mask_positive = (y_true > 0) & (y_pred > 0)
-        if mask_positive.sum() > 0:
-            msle = float(np.mean((np.log1p(y_true[mask_positive]) - np.log1p(y_pred[mask_positive])) ** 2))
-        else:
-            msle = 0.0
-        
-        metrics_list.append({
-            "horizon_step": h,
-            "rmse": rmse,
-            "mae": mae,
-            "mape": mape,
-            "msle": msle,
-            "count": len(pairs)
-        })
-    
-    return metrics_list
-
-
-def block_recursive_forecast(
-    model,
-    df: pl.DataFrame,
-    date_col: str,
-    target_col: str,
-    feature_names: List[str],
-    feature_config: 'FeatureConfig',
-    horizon: int,
-    pred_start_idx: int,
-    pred_end_idx: int,
-    target_mode: str = "raw",
-    residual_lag: int = 1,
-    standardize: bool = False,
-    feature_means: Optional[np.ndarray] = None,
-    feature_stds: Optional[np.ndarray] = None
-) -> List[Dict[str, Any]]:
-    """
-    Generate forecasts using block-wise recursive prediction.
-    
-    Strategy:
-    - Model trained ONCE on [0, pred_start_idx - 1]
-    - Prediction range [pred_start_idx, pred_end_idx] split into blocks of size `horizon`
-    - Within each block: recursive prediction (use predictions for lags)
-    - Between blocks: reset to actual values for lags
-    
-    Block 1: [pred_start_idx, pred_start_idx + horizon - 1]
-      - Step 1: use actual historical lags
-      - Step 2: use prediction from step 1 for lag_1, actual for other lags
-      - Step h: fully recursive within block
-      
-    Block 2: [pred_start_idx + horizon, pred_start_idx + 2*horizon - 1]
-      - RESET: use actual values (including block 1 actuals) for lags
-      - Then recursive within block
-    
-    Args:
-        model: Trained sklearn-compatible model
-        df: Full dataframe with features already computed (sorted by date)
-        date_col, target_col: Column names
-        feature_names: Features used by model
-        feature_config: For lag information
-        horizon: Block size (h steps per block)
-        pred_start_idx: Index where prediction starts
-        pred_end_idx: Index where prediction ends (inclusive)
-        target_mode: "raw" or "residual"
-        residual_lag: Lag for residual reconstruction
-        standardize, feature_means, feature_stds: Standardization params
-    
-    Returns:
-        List of forecast dicts: {date, prediction, actual, block_num, step_in_block}
-    """
-    target_lags = feature_config.target_lags if feature_config else [1]
-    forecasts = []
-    
-    # Process blocks
-    block_num = 0
-    current_idx = pred_start_idx
-    
-    while current_idx <= pred_end_idx:
-        block_num += 1
-        block_end_idx = min(current_idx + horizon - 1, pred_end_idx)
-        block_predictions = {}  # step_in_block -> predicted value
-        
-        for step, idx in enumerate(range(current_idx, block_end_idx + 1), start=1):
-            if idx >= df.height:
-                break
-            
-            row = df.row(idx, named=True)
-            
-            # Build feature vector
-            feature_values = []
-            for feat_name in feature_names:
-                if feat_name.startswith("target_lag_"):
-                    lag = int(feat_name.split("_")[-1])
-                    
-                    # Which step in this block does this lag refer to?
-                    lag_refers_to_step = step - lag
-                    
-                    if lag_refers_to_step > 0 and lag_refers_to_step in block_predictions:
-                        # Use prediction from earlier in THIS block (recursive)
-                        feature_values.append(block_predictions[lag_refers_to_step])
-                    else:
-                        # Use actual value from dataframe (historical or previous blocks)
-                        feature_values.append(row.get(feat_name, 0))
-                else:
-                    feature_values.append(row.get(feat_name, 0))
-            
-            # Skip if any None
-            if any(v is None for v in feature_values):
-                continue
-            
-            X = np.array([feature_values])
-            
-            # Standardization
-            if standardize and feature_means is not None and feature_stds is not None:
-                X = (X - feature_means) / feature_stds
-            
-            # Predict
-            y_pred_raw = float(model.predict(X)[0])
-            
-            # Residual mode reconstruction
-            if target_mode == "residual":
-                residual_feat = f"target_lag_{residual_lag}"
-                lag_refers_to_step = step - residual_lag
-                
-                if lag_refers_to_step > 0 and lag_refers_to_step in block_predictions:
-                    y_lag = block_predictions[lag_refers_to_step]
-                else:
-                    y_lag = row.get(residual_feat, 0)
-                
-                y_pred = y_pred_raw + y_lag if y_lag is not None else y_pred_raw
-            else:
-                y_pred = y_pred_raw
-            
-            # Store for recursive use within block
-            block_predictions[step] = y_pred
-            
-            # Get actual and date
-            actual = row.get(target_col)
-            date_value = row.get(date_col)
-            
-            forecasts.append({
-                date_col: date_value.isoformat() if hasattr(date_value, 'isoformat') else str(date_value),
-                "prediction": float(y_pred),
-                target_col: float(actual) if actual is not None else None,
-                "block_num": block_num,
-                "step_in_block": step,
-                "horizon_step": step  # For compatibility with metrics calculation
-            })
-        
-        # Move to next block
-        current_idx = block_end_idx + 1
-    
-    return forecasts
-
-
-# ============================================================================
-# MODEL TRAINERS
-# ============================================================================
-
-def train_lag(
-    df: pl.DataFrame,
-    date_col: str,
-    target_col: str,
-    training_ranges: List[DateRange],
-    prediction_ranges: List[DateRange],
-    params: Dict[str, Any],
-    forecast_strategy: Optional[ForecastStrategyConfig] = None
-) -> Dict[str, Any]:
-    """
-    Baseline model: predict using a simple lag.
-    
-    Params:
-    - lag: int - which lag to use for prediction (default: 1)
-    
-    With horizon > 1, uses block-wise recursive:
-    - Block 1: pred(t+1) = y(t₀), pred(t+2) = pred(t+1), ...
-    - Block 2: reset to actual values, then recursive again
-    
-    Returns metrics and predictions.
-    """
-    start_time = time.time()
-    
-    # Get lag parameter
-    lag = params.get("lag", 1)
-    
-    # Determine horizon
-    horizon = 1
-    if forecast_strategy is not None:
-        horizon = forecast_strategy.horizon
-    
-    # Create lagged column
-    df_lagged = df.with_columns(
-        pl.col(target_col).shift(lag).alias(f"lag_{lag}")
-    )
-    
-    # Build training data
-    train_dfs = []
-    for tr in training_ranges:
-        range_df = filter_by_date_range(df_lagged, date_col, tr.start, tr.end, inclusive_end=False)
-        train_dfs.append(range_df)
-    
-    train_df = pl.concat(train_dfs) if train_dfs else df_lagged.head(0)
-    train_df = train_df.drop_nulls(subset=[target_col, f"lag_{lag}"])
-    
-    if train_df.height == 0:
-        raise ValueError(f"No training data available after applying lag {lag}")
-    
-    # Calculate metrics on training data (still using naive lag for training metrics)
-    y_true = train_df[target_col].to_numpy()
-    y_pred = train_df[f"lag_{lag}"].to_numpy()
-    
-    training_metrics = calculate_metrics(y_true, y_pred)
-    
-    # Generate predictions for all prediction ranges
-    all_forecasts = []
-    all_actuals = []
-    all_predictions = []
-    
-    for pr in prediction_ranges:
-        pred_df = filter_by_date_range(df_lagged, date_col, pr.start, pr.end)
-        pred_df = pred_df.drop_nulls(subset=[target_col, f"lag_{lag}"])
-        
-        if pred_df.height == 0:
-            continue
-        
-        if horizon > 1:
-            # Block-wise recursive for lag model
-            rows = list(pred_df.iter_rows(named=True))
-            block_num = 0
-            idx = 0
-            
-            while idx < len(rows):
-                block_num += 1
-                block_predictions = {}  # step_in_block -> predicted value
-                block_end = min(idx + horizon, len(rows))
-                
-                for step, row_idx in enumerate(range(idx, block_end), start=1):
-                    row = rows[row_idx]
-                    date_value = row[date_col]
-                    actual = float(row[target_col])
-                    
-                    # For lag model: which step does the lag refer to?
-                    lag_refers_to_step = step - lag
-                    
-                    if lag_refers_to_step > 0 and lag_refers_to_step in block_predictions:
-                        # Use prediction from earlier in THIS block
-                        prediction = block_predictions[lag_refers_to_step]
-                    else:
-                        # Use actual value from dataframe
-                        prediction = float(row[f"lag_{lag}"])
-                    
-                    block_predictions[step] = prediction
-                    
-                    all_forecasts.append({
-                        date_col: date_value.isoformat() if hasattr(date_value, 'isoformat') else str(date_value),
-                        "prediction": prediction,
-                        target_col: actual,
-                        "block_num": block_num,
-                        "step_in_block": step,
-                        "horizon_step": step
-                    })
-                    all_actuals.append(actual)
-                    all_predictions.append(prediction)
-                
-                idx = block_end
-        else:
-            # Standard 1-step prediction
-            for row in pred_df.iter_rows(named=True):
-                date_value = row[date_col]
-                prediction = float(row[f"lag_{lag}"])
-                actual = float(row[target_col])
-                
-                all_forecasts.append({
-                    date_col: date_value.isoformat() if hasattr(date_value, 'isoformat') else str(date_value),
-                    "prediction": prediction,
-                    target_col: actual
-                })
-                all_actuals.append(actual)
-                all_predictions.append(prediction)
-    
-    # Calculate validation metrics
-    if all_actuals and all_predictions:
-        validation_metrics = calculate_metrics(
-            np.array(all_actuals),
-            np.array(all_predictions)
-        )
-    else:
-        validation_metrics = training_metrics
-    
-    execution_time = time.time() - start_time
-    
-    result = {
-        "metrics": {
-            **validation_metrics,
-            "execution_time": execution_time
-        },
-        "forecast": all_forecasts,
-        "feature_importance": None
-    }
-    
-    # Add metrics by horizon if horizon > 1
-    if horizon > 1 and all_forecasts:
-        result["metrics_by_horizon"] = calculate_metrics_by_horizon(all_forecasts, target_col)
-    
-    return result
-
-
-def train_linear_regression(
-    df: pl.DataFrame,
-    date_col: str,
-    target_col: str,
-    training_ranges: List[DateRange],
-    prediction_ranges: List[DateRange],
-    params: Dict[str, Any],
-    forecast_strategy: Optional[ForecastStrategyConfig] = None
-) -> Dict[str, Any]:
-    """
-    Train a Linear Regression model with configurable features.
-    
-    Params:
-    - lags: List[int] - target lags (legacy, used if feature_config not provided)
-    - target_mode: "raw" or "residual"
-    - residual_lag: int - which lag to subtract in residual mode
-    - standardize: bool - standardize features
-    - feature_config: dict - full feature configuration (temporal, exogenous)
-    
-    Returns metrics and predictions.
-    """
-    start_time = time.time()
-    
-    # Get params
-    target_mode = params.get("target_mode", "raw")
-    residual_lag = params.get("residual_lag", 1)
-    standardize = params.get("standardize", False)
-    
-    # Build feature config from params
-    # Support both legacy "lags" param and new "feature_config" structure
-    if "feature_config" in params:
-        fc = params["feature_config"]
-        feature_config = FeatureConfig(
-            target_lags=fc.get("target_lags", [1, 7]),
-            temporal=TemporalFeatureConfig(**fc.get("temporal", {})),
-            exogenous=[ExogenousFeatureConfig(**e) for e in fc.get("exogenous", [])],
-            derived=[DerivedFeatureConfig(**d) for d in fc.get("derived", [])]
-        )
-    else:
-        # Legacy mode: just use lags param
-        lags = params.get("lags", [1, 7])
-        if isinstance(lags, str):
-            lags = [int(x.strip()) for x in lags.split(",")]
-        feature_config = FeatureConfig(target_lags=lags)
-    
-    # Build features on full dataset
-    df_features, feature_names = build_features(df.clone(), date_col, target_col, feature_config)
-    
-    # If residual mode, create the residual target
-    if target_mode == "residual":
-        residual_col = f"target_lag_{residual_lag}"
-        # Ensure we have the residual lag column (for computing residual, NOT as a feature)
-        if residual_col not in df_features.columns:
-            df_features = df_features.with_columns(
-                pl.col(target_col).shift(residual_lag).alias(residual_col)
-            )
-            # Note: We do NOT add residual_col to feature_names
-            # It's only used for residual calculation, not as a model feature
-        
-        # Create residual target: y_residual = y - y_lag
-        df_features = df_features.with_columns(
-            (pl.col(target_col) - pl.col(residual_col)).alias("target_residual")
-        )
-        effective_target = "target_residual"
-    else:
-        effective_target = target_col
-    
-    # Build training data from all training ranges
-    train_dfs = []
-    for tr in training_ranges:
-        chunk = filter_by_date_range(df_features, date_col, tr.start, tr.end, inclusive_end=False)
-        train_dfs.append(chunk)
-    
-    if not train_dfs:
-        raise ValueError("No training data found in specified ranges")
-    
-    train_df = pl.concat(train_dfs)
-    
-    # Drop rows with NaN (from lag/feature creation)
-    cols_to_check = feature_names.copy()
-    if target_mode == "residual":
-        cols_to_check.append(effective_target)
-    train_df = train_df.drop_nulls(subset=cols_to_check)
-    
-    if train_df.height == 0:
-        raise ValueError("Not enough data after creating features")
-    
-    # Prepare X and y for training
-    X_train = train_df.select(feature_names).to_numpy()
-    y_train = train_df.select(effective_target).to_numpy().flatten()
-    
-    # Standardization
-    feature_means = None
-    feature_stds = None
-    if standardize:
-        feature_means = X_train.mean(axis=0)
-        feature_stds = X_train.std(axis=0)
-        feature_stds[feature_stds == 0] = 1  # Avoid division by zero
-        X_train = (X_train - feature_means) / feature_stds
-    
-    # Train model
-    model = LinearRegression()
-    model.fit(X_train, y_train)
-    
-    # Determine forecast horizon
-    horizon = 1
-    if forecast_strategy is not None:
-        horizon = forecast_strategy.horizon
-    
-    # Predict on prediction ranges
-    all_predictions = []
-    all_actuals = []
-    forecast_output = []
-    
-    for pr in prediction_ranges:
-        # Find indices for prediction range
-        pred_df = filter_by_date_range(df_features, date_col, pr.start, pr.end)
-        
-        # Check required columns for prediction
-        cols_to_check_pred = feature_names.copy()
-        if target_mode == "residual":
-            residual_col = f"target_lag_{residual_lag}"
-            if residual_col not in cols_to_check_pred:
-                cols_to_check_pred.append(residual_col)
-        pred_df = pred_df.drop_nulls(subset=cols_to_check_pred)
-        
-        if pred_df.height == 0:
-            continue
-        
-        if horizon > 1:
-            # Block-wise recursive forecasting
-            # Find start/end indices in the full sorted dataframe
-            pred_dates = pred_df.select(date_col).to_series().to_list()
-            first_date = pred_dates[0]
-            last_date = pred_dates[-1]
-            
-            # Find indices in df_features
-            all_dates = df_features.select(date_col).to_series().to_list()
-            try:
-                pred_start_idx = next(i for i, d in enumerate(all_dates) if d >= first_date)
-                pred_end_idx = next(i for i, d in enumerate(all_dates) if d >= last_date)
-            except StopIteration:
-                continue
-            
-            forecasts = block_recursive_forecast(
-                model=model,
-                df=df_features,
-                date_col=date_col,
-                target_col=target_col,
-                feature_names=feature_names,
-                feature_config=feature_config,
-                horizon=horizon,
-                pred_start_idx=pred_start_idx,
-                pred_end_idx=pred_end_idx,
-                target_mode=target_mode,
-                residual_lag=residual_lag,
-                standardize=standardize,
-                feature_means=feature_means,
-                feature_stds=feature_stds
-            )
-            
-            for f in forecasts:
-                forecast_output.append(f)
-                actual = f.get(target_col)
-                pred = f.get("prediction")
-                if actual is not None and pred is not None:
-                    all_actuals.append(actual)
-                    all_predictions.append(pred)
-        else:
-            # Standard 1-step prediction
-            X_pred = pred_df.select(feature_names).to_numpy()
-            y_actual_original = pred_df.select(target_col).to_numpy().flatten()
-            dates = pred_df.select(date_col).to_series().to_list()
-            
-            # Standardize prediction features if needed
-            if standardize and feature_means is not None:
-                X_pred = (X_pred - feature_means) / feature_stds
-            
-            y_pred_raw = model.predict(X_pred)
-            
-            # If residual mode, reconstruct original scale: y_pred = y_pred_residual + y_lag
-            if target_mode == "residual":
-                y_lag_values = pred_df.select(f"target_lag_{residual_lag}").to_numpy().flatten()
-                y_pred = y_pred_raw + y_lag_values
-            else:
-                y_pred = y_pred_raw
-            
-            all_predictions.extend(y_pred)
-            all_actuals.extend(y_actual_original)
-            
-            # Build forecast output for frontend
-            for date, pred_val, actual_val in zip(dates, y_pred, y_actual_original):
-                forecast_output.append({
-                    date_col: date.isoformat() if hasattr(date, 'isoformat') else str(date),
-                    "prediction": float(pred_val),
-                    target_col: float(actual_val),
-                    "horizon_step": 1
-                })
-    
-    # Calculate metrics (on original scale)
-    if len(all_actuals) > 0:
-        metrics = calculate_metrics(np.array(all_actuals), np.array(all_predictions))
-    else:
-        metrics = {"rmse": 0, "mae": 0, "mape": 0, "r2": 0}
-    
-    execution_time = time.time() - start_time
-    metrics["execution_time"] = execution_time
-    
-    # Calculate metrics by horizon step (for multi-step forecasting)
-    metrics_by_horizon = None
-    if horizon > 1 and len(forecast_output) > 0:
-        metrics_by_horizon = calculate_metrics_by_horizon(forecast_output, target_col)
-    
-    # Extract feature importance (coefficients for Linear Regression)
-    # Normalize by sum of absolute values so they represent relative contribution
-    feature_importance = []
-    abs_coefs = [abs(coef) for coef in model.coef_]
-    total_abs = sum(abs_coefs) if sum(abs_coefs) > 0 else 1.0
-    
-    for feat_name, abs_coef in zip(feature_names, abs_coefs):
-        feature_importance.append({
-            "feature": feat_name,
-            "importance": float(abs_coef / total_abs)  # Normalized to sum to 1
-        })
-    # Sort by importance descending
-    feature_importance.sort(key=lambda x: x["importance"], reverse=True)
-    
-    return {
-        "metrics": metrics,
-        "forecast": forecast_output,
-        "feature_importance": feature_importance,
-        "metrics_by_horizon": metrics_by_horizon
-    }
-
-
-import shap
-import numpy as np
-import pandas as pd
-from typing import Dict, Any, List
-
-
-def compute_shap_values(
-    model,
-    X: np.ndarray,
-    feature_names: List[str],
-    df_aligned,
-    date_col: str,
-    feature_config
-) -> Dict[str, Any]:
-    """
-    Compute SHAP values for XGBoost and aggregate them into
-    human-interpretable temporal and exogenous effects.
-
-    - Aggregates sin/cos temporal features
-    - Fills missing temporal values (coverage gaps)
-    - Adds SHAP normalization
-    """
-
-    # --- 1. Compute raw SHAP values ---
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X)
-
-    shap_df = pd.DataFrame(shap_values, columns=feature_names)
-
-    # Convert df_aligned to pandas if needed
-    if not isinstance(df_aligned, pd.DataFrame):
-        df_aligned = df_aligned.to_pandas()
-
-    assert len(df_aligned) == X.shape[0], "SHAP / data misalignment"
-
-    output: Dict[str, Any] = {
-        "temporal": {},
-        "exogenous": {},
-    }
-
-    # --- 2. Temporal features (cyclical aggregation) ---
-
-    temporal_groups = {
-        "hour_of_day": {
-            "enabled": feature_config.temporal.hour_of_day,
-            "features": ["hour_sin", "hour_cos"],
-            "values": df_aligned[date_col].dt.hour,
-            "range": range(24),
-        },
-        "day_of_week": {
-            "enabled": feature_config.temporal.day_of_week,
-            "features": ["dow_sin", "dow_cos"],
-            "values": df_aligned[date_col].dt.weekday,
-            "range": range(7),
-        },
-        "month": {
-            "enabled": feature_config.temporal.month,
-            "features": ["month_sin", "month_cos"],
-            "values": df_aligned[date_col].dt.month,
-            "range": range(1, 13),
-        },
-        "minute_of_day": {
-            "enabled": feature_config.temporal.minute_of_day,
-            "features": ["minute_of_day_sin", "minute_of_day_cos"],
-            "values": (
-                df_aligned[date_col].dt.hour * 60
-                + df_aligned[date_col].dt.minute
-            ),
-            "range": range(1440),
-        },
-    }
-
-    for name, cfg in temporal_groups.items():
-        if not cfg["enabled"]:
-            continue
-
-        f1, f2 = cfg["features"]
-
-        # Skip if features are missing
-        if f1 not in shap_df.columns or f2 not in shap_df.columns:
-            continue
-
-        # Aggregate sin + cos
-        shap_sum = shap_df[f1] + shap_df[f2]
-
-        temp_df = pd.DataFrame({
-            "value": cfg["values"].values,
-            "shap": shap_sum.values,
-        })
-
-        grouped = (
-            temp_df
-            .groupby("value", as_index=False)
-            .agg(
-                shap=("shap", "mean"),
-                count=("shap", "size"),
-            )
-        )
-
-        # --- Fill missing values ---
-        existing = set(grouped["value"].tolist())
-        full_rows = []
-
-        for v in cfg["range"]:
-            if v in existing:
-                row = grouped[grouped["value"] == v].iloc[0]
-                full_rows.append({
-                    "value": int(v),
-                    "shap": float(row["shap"]),
-                    "count": int(row["count"]),
-                })
-            else:
-                full_rows.append({
-                    "value": int(v),
-                    "shap": 0.0,
-                    "count": 0,
-                })
-
-        # --- Normalization (per temporal feature) ---
-        max_abs = max(abs(r["shap"]) for r in full_rows) or 1.0
-        for r in full_rows:
-            r["shap_norm"] = r["shap"] / max_abs
-
-        output["temporal"][name] = full_rows
-
-    # --- 3. Exogenous features ---
-    # Aggregate by base variable (before lag / delta / pct)
-
-    for exog in feature_config.exogenous:
-        base_col = exog.column
-
-        related_features = [
-            f for f in feature_names
-            if f.startswith(base_col + "_")
-            or f == f"{base_col}_actual"
-        ]
-
-        if not related_features:
-            continue
-
-        mean_abs_shap = float(
-            np.abs(shap_df[related_features].values).mean()
-        )
-
-        mean_shap = float(
-            shap_df[related_features].values.mean()
-        )
-
-        output["exogenous"][base_col] = {
-            "mean_abs_shap": mean_abs_shap,
-            "mean_shap": mean_shap,
-            "direction": (
-                "positive" if mean_shap > 0
-                else "negative" if mean_shap < 0
-                else "neutral"
-            ),
-            "features": related_features,
-        }
-
-    return output
-
-
-
-def train_xgboost(
-    df: pl.DataFrame,
-    date_col: str,
-    target_col: str,
-    training_ranges: List[DateRange],
-    prediction_ranges: List[DateRange],
-    params: Dict[str, Any],
-    forecast_strategy: Optional[ForecastStrategyConfig] = None
-) -> Dict[str, Any]:
-    """
-    Train an XGBoost model with configurable features.
-    Uses the same feature engineering as Linear Regression.
-    Supports target_mode (raw/residual) like Linear Regression.
-    """
-    start_time = time.time()
-    
-    # Get XGBoost specific params
-    n_estimators = params.get("n_estimators", 100)
-    max_depth = params.get("max_depth", 6)
-    learning_rate = params.get("learning_rate", 0.1)
-    
-    # Get target mode params (same as linear regression)
-    target_mode = params.get("target_mode", "raw")  # "raw" or "residual"
-    residual_lag = params.get("residual_lag", 1)
-    
-    # Build feature config (same as linear regression)
-    if "feature_config" in params:
-        fc = params["feature_config"]
-        feature_config = FeatureConfig(
-            target_lags=fc.get("target_lags", [1, 7]),
-            temporal=TemporalFeatureConfig(**fc.get("temporal", {})),
-            exogenous=[ExogenousFeatureConfig(**e) for e in fc.get("exogenous", [])],
-            derived=[DerivedFeatureConfig(**d) for d in fc.get("derived", [])]
-        )
-    else:
-        lags = params.get("lags", [1, 7, 14, 30])
-        if isinstance(lags, str):
-            lags = [int(x.strip()) for x in lags.split(",")]
-        feature_config = FeatureConfig(target_lags=lags)
-    
-    # Build features
-    df_features, feature_names = build_features(df.clone(), date_col, target_col, feature_config)
-    
-    # For residual mode, create residual target and ensure lag column exists
-    effective_target = target_col
-    if target_mode == "residual":
-        residual_col = f"target_lag_{residual_lag}"
-        # Ensure we have the residual lag column (for computing residual, NOT as a feature)
-        if residual_col not in df_features.columns:
-            df_features = df_features.with_columns(
-                pl.col(target_col).shift(residual_lag).alias(residual_col)
-            )
-            # Note: We do NOT add residual_col to feature_names
-            # It's only used for residual calculation, not as a model feature
-        
-        df_features = df_features.with_columns(
-            (pl.col(target_col) - pl.col(residual_col)).alias("_target_residual")
-        )
-        effective_target = "_target_residual"
-    
-    # Build training data
-    train_dfs = []
-    for tr in training_ranges:
-        chunk = filter_by_date_range(df_features, date_col, tr.start, tr.end, inclusive_end=False)
-        train_dfs.append(chunk)
-    
-    if not train_dfs:
-        raise ValueError("No training data found")
-    
-    # Drop nulls including residual target if needed
-    cols_to_check = feature_names.copy()
-    if target_mode == "residual":
-        cols_to_check.append(effective_target)
-    train_df = pl.concat(train_dfs).drop_nulls(subset=cols_to_check)
-    
-    if train_df.height == 0:
-        raise ValueError("Not enough data after creating features")
-    
-    X_train = train_df.select(feature_names).to_numpy()
-    y_train = train_df.select(effective_target).to_numpy().flatten()
-    
-    # Train XGBoost
-    model = xgb.XGBRegressor(
-        n_estimators=n_estimators,
-        max_depth=max_depth,
-        learning_rate=learning_rate,
-        random_state=42,
-        n_jobs=-1
-    )
-    model.fit(X_train, y_train)
-    
-    # Determine forecast horizon
-    horizon = 1
-    if forecast_strategy is not None:
-        horizon = forecast_strategy.horizon
-    
-    # Predict
-    all_predictions = []
-    all_actuals = []
-    forecast_output = []
-    
-    for pr in prediction_ranges:
-        pred_df = filter_by_date_range(df_features, date_col, pr.start, pr.end)
-        
-        # Check required columns for prediction
-        cols_to_check_pred = feature_names.copy()
-        if target_mode == "residual":
-            residual_col = f"target_lag_{residual_lag}"
-            if residual_col not in cols_to_check_pred:
-                cols_to_check_pred.append(residual_col)
-        pred_df = pred_df.drop_nulls(subset=cols_to_check_pred)
-        
-        if pred_df.height == 0:
-            continue
-        
-        if horizon > 1:
-            # Block-wise recursive forecasting
-            pred_dates = pred_df.select(date_col).to_series().to_list()
-            first_date = pred_dates[0]
-            last_date = pred_dates[-1]
-            
-            all_dates = df_features.select(date_col).to_series().to_list()
-            try:
-                pred_start_idx = next(i for i, d in enumerate(all_dates) if d >= first_date)
-                pred_end_idx = next(i for i, d in enumerate(all_dates) if d >= last_date)
-            except StopIteration:
-                continue
-            
-            forecasts = block_recursive_forecast(
-                model=model,
-                df=df_features,
-                date_col=date_col,
-                target_col=target_col,
-                feature_names=feature_names,
-                feature_config=feature_config,
-                horizon=horizon,
-                pred_start_idx=pred_start_idx,
-                pred_end_idx=pred_end_idx,
-                target_mode=target_mode,
-                residual_lag=residual_lag,
-                standardize=False,
-                feature_means=None,
-                feature_stds=None
-            )
-            
-            for f in forecasts:
-                forecast_output.append(f)
-                actual = f.get(target_col)
-                pred = f.get("prediction")
-                if actual is not None and pred is not None:
-                    all_actuals.append(actual)
-                    all_predictions.append(pred)
-        else:
-            # Standard 1-step prediction
-            X_pred = pred_df.select(feature_names).to_numpy()
-            y_actual_original = pred_df.select(target_col).to_numpy().flatten()
-            dates = pred_df.select(date_col).to_series().to_list()
-            
-            y_pred_raw = model.predict(X_pred)
-            
-            # If residual mode, reconstruct original scale
-            if target_mode == "residual":
-                y_lag_values = pred_df.select(f"target_lag_{residual_lag}").to_numpy().flatten()
-                y_pred = y_pred_raw + y_lag_values
-            else:
-                y_pred = y_pred_raw
-            
-            all_predictions.extend(y_pred)
-            all_actuals.extend(y_actual_original)
-            
-            for date, pred_val, actual_val in zip(dates, y_pred, y_actual_original):
-                forecast_output.append({
-                    date_col: date.isoformat() if hasattr(date, 'isoformat') else str(date),
-                    "prediction": float(pred_val),
-                    target_col: float(actual_val),
-                    "horizon_step": 1
-                })
-    
-    # Metrics (on original scale)
-    metrics = calculate_metrics(np.array(all_actuals), np.array(all_predictions)) if all_actuals else {"rmse": 0, "mae": 0, "mape": 0, "r2": 0}
-    metrics["execution_time"] = time.time() - start_time
-    
-    # Calculate metrics by horizon step (for multi-step forecasting)
-    metrics_by_horizon = None
-    if horizon > 1 and len(forecast_output) > 0:
-        metrics_by_horizon = calculate_metrics_by_horizon(forecast_output, target_col)
-    
-    # Feature importance from XGBoost
-    feature_importance = [
-        {"feature": name, "importance": float(imp)}
-        for name, imp in zip(feature_names, model.feature_importances_)
-    ]
-    feature_importance.sort(key=lambda x: x["importance"], reverse=True)
-    
-    shap_analysis = compute_shap_values(
-        model=model,
-        X=X_train,
-        feature_names=feature_names,
-        df_aligned=train_df.select([date_col] + feature_names),
-        date_col=date_col,
-        feature_config=feature_config,
-    )
-
-    return {
-        "metrics": metrics,
-        "forecast": forecast_output,
-        "feature_importance": feature_importance,
-        "shap_analysis": shap_analysis,
-        "metrics_by_horizon": metrics_by_horizon
-    }
-
-
-def train_arima(
-    df: pl.DataFrame,
-    date_col: str,
-    target_col: str,
-    training_ranges: List[DateRange],
-    prediction_ranges: List[DateRange],
-    params: Dict[str, Any],
-    horizon: int = 1
-) -> Dict[str, Any]:
-    """
-    Train an ARIMA model with block-wise forecasting for fair horizon comparison.
-    ARIMA is a univariate model - it only uses the target variable's history.
-    
-    Block-wise strategy:
-    - Split prediction range into blocks of size `horizon`
-    - For each block, forecast h steps ahead
-    - Assign horizon_step 1..h to each prediction
-    - Refit/update model between blocks (optional, here we just re-forecast)
-    """
-    start_time = time.time()
-    
-    # Get ARIMA params (p, d, q)
-    p = params.get("p", 1)  # AR order
-    d = params.get("d", 1)  # Differencing order
-    q = params.get("q", 1)  # MA order
-    
-    # Build training data
-    train_dfs = []
-    for tr in training_ranges:
-        chunk = filter_by_date_range(df, date_col, tr.start, tr.end, inclusive_end=False)
-        train_dfs.append(chunk)
-    
-    if not train_dfs:
-        raise ValueError("No training data found")
-    
-    train_df = pl.concat(train_dfs).sort(date_col)
-    y_train = train_df.select(target_col).to_numpy().flatten()
-    
-    if len(y_train) < p + d + q + 5:
-        raise ValueError(f"Not enough training data for ARIMA({p},{d},{q})")
-    
-    # Fit ARIMA on training data
-    try:
-        model = ARIMA(y_train, order=(p, d, q))
-        fitted = model.fit()
-    except Exception as e:
-        raise ValueError(f"ARIMA fitting failed: {e}")
-    
-    # Predict on prediction ranges with block-wise horizon tracking
-    all_predictions = []
-    all_actuals = []
-    forecast_output = []
-    
-    for pr in prediction_ranges:
-        pred_df = filter_by_date_range(df, date_col, pr.start, pr.end).sort(date_col)
-        
-        if pred_df.height == 0:
-            continue
-        
-        y_actual = pred_df.select(target_col).to_numpy().flatten()
-        dates = pred_df.select(date_col).to_series().to_list()
-        n_total = len(y_actual)
-        
-        # Block-wise forecasting
-        # Use the fitted model and update with new observations (faster than refitting)
-        current_fitted = fitted
-        
-        for block_start in range(0, n_total, horizon):
-            block_end = min(block_start + horizon, n_total)
-            block_size = block_end - block_start
-            
-            try:
-                block_forecast = current_fitted.forecast(steps=block_size)
-                y_pred_block = np.array(block_forecast)
-            except Exception:
-                # Fallback: use last known value from training
-                y_pred_block = np.full(block_size, y_train[-1])
-            
-            # Add predictions with horizon_step
-            for i in range(block_size):
-                idx = block_start + i
-                horizon_step = i + 1  # 1-indexed within block
-                
-                all_predictions.append(y_pred_block[i])
-                all_actuals.append(y_actual[idx])
-                
-                forecast_output.append({
-                    date_col: dates[idx].isoformat() if hasattr(dates[idx], 'isoformat') else str(dates[idx]),
-                    "prediction": float(y_pred_block[i]),
-                    target_col: float(y_actual[idx]),
-                    "horizon_step": horizon_step
-                })
-            
-            # Update model with actual observations for next block (fast update, no refit)
-            try:
-                current_fitted = current_fitted.append(y_actual[block_start:block_end], refit=False)
-            except Exception:
-                # If append fails, continue with current model
-                pass
-    
-    # Metrics
-    metrics = calculate_metrics(np.array(all_actuals), np.array(all_predictions)) if all_actuals else {"rmse": 0, "mae": 0, "mape": 0, "r2": 0, "msle": 0}
-    metrics["execution_time"] = time.time() - start_time
-    
-    # Calculate metrics by horizon
-    metrics_by_horizon = calculate_metrics_by_horizon(forecast_output, target_col) if forecast_output else []
-    
-    return {
-        "metrics": metrics,
-        "metrics_by_horizon": metrics_by_horizon,
-        "forecast": forecast_output,
-        "feature_importance": None  # ARIMA doesn't have feature importance
-    }
-
-
-def train_prophet(
-    df: pl.DataFrame,
-    date_col: str,
-    target_col: str,
-    training_ranges: List[DateRange],
-    prediction_ranges: List[DateRange],
-    params: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Train a Prophet model with optional lag regressors.
-    Prophet decomposes series into trend + seasonality.
-    Adding lag regressors helps capture short-term fluctuations.
-    """
-    start_time = time.time()
-    
-    # Get Prophet params
-    daily_seasonality = params.get("daily_seasonality", False)
-    weekly_seasonality = params.get("weekly_seasonality", True)
-    yearly_seasonality = params.get("yearly_seasonality", True)
-    seasonality_mode = params.get("seasonality_mode", "additive")
-    
-    # Get lag regressors (disabled by default - frontend doesn't use them)
-    use_lag_regressors = params.get("use_lag_regressors", False)
-    lag_regressors = params.get("lag_regressors", [])
-    if isinstance(lag_regressors, str):
-        lag_regressors = [int(x.strip()) for x in lag_regressors.split(",")]
-    
-    # Add lag columns to dataframe
-    df_with_lags = df.clone().sort(date_col)
-    regressor_names = []
-    
-    if use_lag_regressors:
-        for lag in lag_regressors:
-            col_name = f"lag_{lag}"
-            df_with_lags = df_with_lags.with_columns(
-                pl.col(target_col).shift(lag).alias(col_name)
-            )
-            regressor_names.append(col_name)
-    
-    # Build training data
-    train_dfs = []
-    for tr in training_ranges:
-        chunk = filter_by_date_range(df_with_lags, date_col, tr.start, tr.end, inclusive_end=False)
-        train_dfs.append(chunk)
-    
-    if not train_dfs:
-        raise ValueError("No training data found")
-    
-    train_df = pl.concat(train_dfs).sort(date_col)
-    
-    # Drop nulls from lag columns
-    if regressor_names:
-        train_df = train_df.drop_nulls(subset=regressor_names)
-    
-    if train_df.height == 0:
-        raise ValueError("No training data after filtering by date ranges")
-    
-    # Build pandas dataframe for Prophet
-    cols_to_select = [pl.col(date_col).alias("ds"), pl.col(target_col).alias("y")]
-    for reg_name in regressor_names:
-        cols_to_select.append(pl.col(reg_name))
-    
-    prophet_train = train_df.select(cols_to_select).to_pandas()
-    
-    # Ensure ds is datetime with nanosecond precision (Prophet has issues with microseconds)
-    prophet_train['ds'] = pd.to_datetime(prophet_train['ds']).astype('datetime64[ns]')
-    
-    # Initialize Prophet
-    model = Prophet(
-        daily_seasonality=daily_seasonality,
-        weekly_seasonality=weekly_seasonality,
-        yearly_seasonality=yearly_seasonality,
-        seasonality_mode=seasonality_mode
-    )
-    
-    # Add lag regressors
-    for reg_name in regressor_names:
-        model.add_regressor(reg_name)
-    
-    model.fit(prophet_train)
-    
-    # Predict on prediction ranges
-    all_predictions = []
-    all_actuals = []
-    forecast_output = []
-    
-    for pr in prediction_ranges:
-        pred_df = filter_by_date_range(df_with_lags, date_col, pr.start, pr.end).sort(date_col)
-        
-        if regressor_names:
-            pred_df = pred_df.drop_nulls(subset=regressor_names)
-        
-        if pred_df.height == 0:
-            continue
-        
-        y_actual = pred_df.select(target_col).to_numpy().flatten()
-        dates = pred_df.select(date_col).to_series().to_list()
-        
-        # Create future dataframe for Prophet (must include regressors)
-        cols_for_future = [pl.col(date_col).alias("ds")]
-        for reg_name in regressor_names:
-            cols_for_future.append(pl.col(reg_name))
-        
-        future = pred_df.select(cols_for_future).to_pandas()
-        
-        # Ensure ds is datetime with nanosecond precision (Prophet has issues with microseconds)
-        future['ds'] = pd.to_datetime(future['ds']).astype('datetime64[ns]')
-        
-        forecast = model.predict(future)
-        y_pred = forecast["yhat"].values
-        
-        all_predictions.extend(y_pred)
-        all_actuals.extend(y_actual)
-        
-        for date, pred_val, actual_val in zip(dates, y_pred, y_actual):
-            forecast_output.append({
-                date_col: date.isoformat() if hasattr(date, 'isoformat') else str(date),
-                "prediction": float(pred_val),
-                target_col: float(actual_val)
-            })
-    
-    # Metrics
-    metrics = calculate_metrics(np.array(all_actuals), np.array(all_predictions)) if all_actuals else {"rmse": 0, "mae": 0, "mape": 0, "r2": 0}
-    metrics["execution_time"] = time.time() - start_time
-    
-    # Feature importance approximation from regressor coefficients
-    feature_importance = None
-    if regressor_names and hasattr(model, 'params'):
-        try:
-            # Prophet stores regressor coefficients in params
-            feature_importance = []
-            for reg_name in regressor_names:
-                # Get coefficient from model (simplified)
-                feature_importance.append({
-                    "feature": reg_name,
-                    "importance": 1.0 / len(regressor_names)  # Equal importance as placeholder
-                })
-        except Exception:
-            pass
-    
-    return {
-        "metrics": metrics,
-        "forecast": forecast_output,
-        "feature_importance": feature_importance
-    }
-
 
 # ============================================================================
 # API ENDPOINTS
@@ -1805,15 +186,12 @@ async def analyze_dataset(request: DatasetAnalysisRequest, _: None = Depends(ver
     Auto-detects frequency, missing values, date range, etc.
     """
     try:
-        # Convert to Polars DataFrame
         df = pl.DataFrame(request.data, infer_schema_length=None)
         date_col = request.date_column
         target_col = request.target_column
         
         # Parse dates
         df = parse_dates_flexible(df, date_col)
-        
-        # Filter out null dates
         df = df.filter(pl.col(date_col).is_not_null())
         
         # Convert target to float
@@ -1831,27 +209,18 @@ async def analyze_dataset(request: DatasetAnalysisRequest, _: None = Depends(ver
                 pl.col(target_col).cast(pl.Float64, strict=False)
             )
         
-        # Sort by date
         df = df.sort(date_col)
         
         if df.height == 0:
-            return DatasetAnalysisResponse(
-                status="error",
-                message="No valid data after parsing"
-            )
+            return DatasetAnalysisResponse(status="error", message="No valid data after parsing")
         
-        # Get date range
+        # Get stats
         date_min = df[date_col].min()
         date_max = df[date_col].max()
-        
-        # Detect frequency
         freq_code, freq_label, missing_dates = detect_frequency(df, date_col)
         
-        # Calculate target stats
         target_series = df[target_col]
         missing_target = target_series.null_count()
-        
-        # Filter non-null for stats
         valid_target = target_series.drop_nulls()
         
         stats = DatasetStats(
@@ -1867,8 +236,7 @@ async def analyze_dataset(request: DatasetAnalysisRequest, _: None = Depends(ver
             value_mean=float(valid_target.mean()) if len(valid_target) > 0 else 0.0,
         )
         
-        # Build normalized data for frontend (dates in ISO format, clean values)
-        # Filter rows with valid target values
+        # Normalized data for frontend
         clean_df = df.filter(pl.col(target_col).is_not_null())
         normalized_data = [
             NormalizedDataPoint(
@@ -1878,7 +246,7 @@ async def analyze_dataset(request: DatasetAnalysisRequest, _: None = Depends(ver
             for row in clean_df.iter_rows(named=True)
         ]
         
-        # Build available columns info (excluding date and target)
+        # Available columns info
         available_columns = []
         for col_name in df.columns:
             if col_name in [date_col, target_col]:
@@ -1887,7 +255,6 @@ async def analyze_dataset(request: DatasetAnalysisRequest, _: None = Depends(ver
             col_series = df[col_name]
             dtype = col_series.dtype
             
-            # Determine column type
             if dtype in [pl.Float64, pl.Float32, pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
                 dtype_str = "numeric"
             elif dtype == pl.Boolean:
@@ -1897,9 +264,7 @@ async def analyze_dataset(request: DatasetAnalysisRequest, _: None = Depends(ver
             else:
                 dtype_str = "string"
             
-            # Get sample values (first 5 non-null)
             sample_vals = col_series.drop_nulls().head(5).to_list()
-            
             available_columns.append(ColumnInfo(
                 name=col_name,
                 dtype=dtype_str,
@@ -1917,10 +282,7 @@ async def analyze_dataset(request: DatasetAnalysisRequest, _: None = Depends(ver
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return DatasetAnalysisResponse(
-            status="error",
-            message=str(e)
-        )
+        return DatasetAnalysisResponse(status="error", message=str(e))
 
 
 @app.post("/train", response_model=TrainingResponse)
@@ -1930,46 +292,36 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
     Receives data + config, trains requested models, returns predictions + metrics.
     """
     try:
-        # 1. Convert data to Polars DataFrame with increased schema inference
-        # Use infer_schema_length=None to scan all rows for type inference
         df = pl.DataFrame(request.data, infer_schema_length=None)
         
         date_col = request.data_config.date_column
         target_col = request.data_config.target_column
         
-        # Parse dates using the intelligent format detection (same as /analyze)
+        # Parse dates
         df = parse_dates_flexible(df, date_col)
-        
-        # Remove rows with null dates after parsing
         df = df.filter(pl.col(date_col).is_not_null())
         
-        # Handle target column - convert to float, handling invalid values
+        # Handle target column
         try:
-            # First cast to string to handle any type, then clean, then to float
             df = df.with_columns(
                 pl.col(target_col)
                   .cast(pl.Utf8)
                   .str.strip_chars()
-                  .str.replace(r"^\?", "")  # Remove leading "?"
-                  .str.replace(r"[^\d\.-]", "")  # Keep only digits, dots, and minus
+                  .str.replace(r"^\?", "")
+                  .str.replace(r"[^\d\.-]", "")
                   .cast(pl.Float64)
             )
-        except Exception as e:
-            print(f"Warning: Could not convert {target_col} to float: {e}")
-            # Try simpler conversion
+        except Exception:
             df = df.with_columns(
                 pl.col(target_col).cast(pl.Float64, strict=False)
             )
         
-        # Remove rows with null target values
         df = df.filter(pl.col(target_col).is_not_null())
         
-        # Convert potential exogenous columns to numeric
-        # (columns that are not date or target and might be used as features)
+        # Convert exogenous columns to numeric
         for col_name in df.columns:
             if col_name in [date_col, target_col]:
                 continue
-            # Try to convert to float if not already numeric
             col_dtype = df[col_name].dtype
             if col_dtype not in [pl.Float64, pl.Float32, pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
                 try:
@@ -1977,9 +329,8 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
                         pl.col(col_name).cast(pl.Utf8).str.strip_chars().cast(pl.Float64, strict=False)
                     )
                 except Exception:
-                    pass  # Keep as is if conversion fails
+                    pass
         
-        # Sort by date
         df = df.sort(date_col)
         
         if df.height == 0:
@@ -1987,7 +338,6 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
         
         results = []
         
-        # 2. Train each requested model
         for model_config in request.models:
             try:
                 if model_config.type == "LAG":
@@ -2021,6 +371,7 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
                         forecast_strategy=request.data_config.forecast_strategy
                     )
                 elif model_config.type == "ARIMA":
+                    horizon = request.data_config.forecast_strategy.horizon if request.data_config.forecast_strategy else 1
                     result = train_arima(
                         df=df,
                         date_col=date_col,
@@ -2028,11 +379,11 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
                         training_ranges=request.data_config.training_ranges,
                         prediction_ranges=request.data_config.prediction_ranges,
                         params=model_config.params,
-                        horizon=request.data_config.forecast_strategy.horizon
+                        horizon=horizon
                     )
                 elif model_config.type == "PROPHET":
                     if not PROPHET_AVAILABLE:
-                        raise ValueError("Prophet is not installed on this server. Please use Linear Regression, XGBoost, or ARIMA instead.")
+                        raise ValueError("Prophet is not installed. Use Linear Regression, XGBoost, or ARIMA instead.")
                     result = train_prophet(
                         df=df,
                         date_col=date_col,
@@ -2042,11 +393,8 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
                         params=model_config.params
                     )
                 else:
-                    # For unimplemented models, return a placeholder
                     result = {
-                        "metrics": {
-                            "rmse": 0, "mae": 0, "mape": 0, "r2": 0, "msle": 0, "execution_time": 0
-                        },
+                        "metrics": {"rmse": 0, "mae": 0, "mape": 0, "r2": 0, "msle": 0, "execution_time": 0},
                         "forecast": [],
                         "feature_importance": None
                     }
@@ -2064,7 +412,6 @@ async def train_models(request: TrainingRequest, _: None = Depends(verify_api_ke
             except Exception as e:
                 error_msg = str(e)
                 print(f"Error training {model_config.name}: {error_msg}")
-                # Return result with error message
                 results.append(ModelResult(
                     model_id=model_config.id,
                     model_name=model_config.name,
