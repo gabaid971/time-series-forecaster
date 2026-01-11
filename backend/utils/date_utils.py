@@ -60,9 +60,14 @@ def detect_frequency(df: pl.DataFrame, date_col: str) -> Tuple[str, str, int]:
         freq_code, freq_label = "M", "Monthly"
         expected_diff = MONTH
     
-    # Count missing dates
-    tolerance = expected_diff * 1.5
-    missing_count = sum(1 for d in diff_seconds if d > tolerance)
+    # Count ACTUAL missing dates/periods (not just gaps)
+    # For each gap, calculate how many expected periods are missing
+    missing_count = 0
+    for d in diff_seconds:
+        if d > expected_diff * 1.5:  # There's a gap
+            # How many periods are missing in this gap?
+            missing_periods = int(round(d / expected_diff)) - 1
+            missing_count += max(0, missing_periods)
     
     return freq_code, freq_label, missing_count
 

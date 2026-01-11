@@ -9,10 +9,34 @@ import Papa from 'papaparse';
 import TimeSeriesChart from '../components/TimeSeriesChart';
 import StrategyStep from '../components/StrategyStep';
 import { ShapChart } from '../components/charts';
+import { LagAnalysisPanel } from '../components/LagAnalysisPanel';
 
 // Utilities
 import { getApiUrl, getApiHeaders, API_MODE, BACKEND_URL } from '../lib/api';
 import { formatFeatureName, getShapKeyForFeature } from '../lib/formatters';
+
+// Types for advanced analysis
+interface LagAnalysis {
+  suggested_lags: number[];
+  acf: number[];
+  pacf: number[];
+  confidence_interval: number;
+  significant_lags: { lag: number; pacf: number; significant: boolean }[];
+  seasonality: {
+    detected: boolean;
+    period?: number;
+    period_label?: string;
+    strength?: number;
+  };
+  n_observations: number;
+}
+
+interface DataAlert {
+  type: 'warning' | 'info' | 'error';
+  category: string;
+  message: string;
+  details?: Record<string, any>;
+}
 
 // Debug: log API config (check browser console)
 if (typeof window !== 'undefined') {
@@ -56,6 +80,10 @@ export default function ForecastingPage() {
     value_mean: number;
   } | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  
+  // Advanced analysis state
+  const [lagAnalysis, setLagAnalysis] = useState<LagAnalysis | null>(null);
+  const [dataAlerts, setDataAlerts] = useState<DataAlert[] | null>(null);
 
   // Export forecasts to CSV
   const exportForecastsToCSV = () => {
@@ -287,6 +315,9 @@ export default function ForecastingPage() {
     if (!data || !rawData.length) return;
     
     setIsAnalyzing(true);
+    setLagAnalysis(null);
+    setDataAlerts(null);
+    
     try {
       const response = await fetch(getApiUrl('analyze'), {
         method: 'POST',
@@ -307,6 +338,19 @@ export default function ForecastingPage() {
         // Store available columns for exogenous features
         if (result.available_columns) {
           setAvailableColumns(result.available_columns);
+        }
+        
+        // Store advanced analysis results
+        if (result.lag_analysis) {
+          setLagAnalysis(result.lag_analysis);
+          // Auto-apply suggested lags
+          if (result.lag_analysis.suggested_lags?.length > 0) {
+            setDefaultLags(result.lag_analysis.suggested_lags);
+          }
+        }
+        
+        if (result.alerts) {
+          setDataAlerts(result.alerts);
         }
         
         // Use normalized data from backend (dates in ISO format, values cleaned)
@@ -487,14 +531,23 @@ export default function ForecastingPage() {
                           <Upload className={`w-7 h-7 sm:w-10 sm:h-10 transition-colors ${isDragging ? 'text-amber-500' : 'text-slate-400 group-hover:text-amber-500'}`} />
                         </div>
                         <h3 className="text-lg sm:text-xl font-semibold text-white mb-2">Upload Time Series</h3>
-                        <p className="text-slate-400 text-sm sm:text-base mb-4 sm:mb-8">Drag & drop CSV file here</p>
+                        <p className="text-slate-400 text-sm sm:text-base mb-2">Drag & drop your CSV file here</p>
+                        <p className="text-slate-500 text-xs mb-4 sm:mb-6">CSV with headers required (date column + target column)</p>
                         <button className="px-4 py-2 sm:px-6 sm:py-3 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium transition-all border border-white/10 text-sm sm:text-base">
                           Browse Files
                         </button>
                       </div>
                     </div>
-                    <div className="flex gap-4 text-slate-500 text-sm">
-                      <span>Supported: .csv</span>
+                    <div className="flex flex-wrap gap-4 text-slate-500 text-xs justify-center">
+                      <span className="flex items-center gap-1.5">
+                        <CheckCircle2 size={12} className="text-emerald-500" /> CSV format
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <CheckCircle2 size={12} className="text-emerald-500" /> Headers in first row
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <CheckCircle2 size={12} className="text-emerald-500" /> Date + numeric columns
+                      </span>
                     </div>
                     
                     {/* Example Data Buttons */}
@@ -634,6 +687,14 @@ export default function ForecastingPage() {
                         <p className="text-slate-500 text-sm">Select date and target columns to analyze</p>
                       )}
                     </div>
+
+                    {/* Lag Analysis Panel with ACF/PACF */}
+                    <LagAnalysisPanel
+                      lagAnalysis={lagAnalysis}
+                      alerts={dataAlerts}
+                      currentLags={defaultLags}
+                      onApplyLags={(lags) => setDefaultLags(lags)}
+                    />
 
                     <div className="flex-1 overflow-hidden border border-white/10 rounded-xl">
                       <div className="overflow-auto h-full custom-scrollbar">
@@ -943,14 +1004,47 @@ export default function ForecastingPage() {
                             const minRmse = Math.min(...rmseValues);
                             const maxRmse = Math.max(...rmseValues);
                             const range = maxRmse - minRmse;
-                            const maxBarHeight = 48; // pixels (total height minus labels space)
+                            const maxBarHeight = 48;
+                            
+                            // Responsive: limit visible horizons based on total count
+                            const totalHorizons = horizonMetrics.length;
+                            const maxVisible = 12; // Max bars to show
+                            const needsTruncation = totalHorizons > maxVisible;
+                            
+                            // If truncation needed, show first 4, ellipsis, last 4
+                            const visibleMetrics = needsTruncation
+                              ? [
+                                  ...horizonMetrics.slice(0, 5),
+                                  { horizon_step: -1, rmse: 0, mae: 0, mape: 0 }, // Ellipsis marker
+                                  ...horizonMetrics.slice(-5)
+                                ]
+                              : horizonMetrics;
                             
                             return (
                               <div key={res.model_id} className="space-y-2">
-                                <h4 className="text-sm font-medium text-slate-300">{res.model_name}</h4>
+                                <div className="flex items-center justify-between">
+                                  <h4 className="text-sm font-medium text-slate-300">{res.model_name}</h4>
+                                  {needsTruncation && (
+                                    <span className="text-[10px] text-slate-500">
+                                      {totalHorizons} steps total
+                                    </span>
+                                  )}
+                                </div>
                                 {/* Compact horizontal bar chart with amplified scale */}
-                                <div className="flex items-end gap-1 h-20 bg-black/20 rounded-lg p-2 pt-4">
-                                  {horizonMetrics.map(hm => {
+                                <div className="flex items-end gap-0.5 sm:gap-1 h-20 bg-black/20 rounded-lg p-2 pt-4 overflow-hidden">
+                                  {visibleMetrics.map((hm, idx) => {
+                                    // Ellipsis marker
+                                    if (hm.horizon_step === -1) {
+                                      return (
+                                        <div 
+                                          key="ellipsis"
+                                          className="flex-shrink-0 w-6 flex flex-col items-center justify-center h-full"
+                                        >
+                                          <span className="text-slate-500 text-xs">⋯</span>
+                                        </div>
+                                      );
+                                    }
+                                    
                                     // Scale from 20% (min) to 100% (max) to show differences clearly
                                     const normalizedRatio = range > 0 
                                       ? 0.2 + ((hm.rmse - minRmse) / range) * 0.8 
@@ -959,20 +1053,20 @@ export default function ForecastingPage() {
                                     return (
                                       <div 
                                         key={hm.horizon_step}
-                                        className="flex-1 flex flex-col items-center justify-end h-full"
+                                        className="flex-1 min-w-0 flex flex-col items-center justify-end h-full"
                                         title={`h=${hm.horizon_step}: RMSE=${hm.rmse.toFixed(2)}, MAE=${hm.mae.toFixed(2)}`}
                                       >
-                                        <span className="text-[7px] text-slate-400 mb-0.5">{hm.rmse.toFixed(1)}</span>
+                                        <span className="text-[6px] sm:text-[7px] text-slate-400 mb-0.5 truncate w-full text-center">{hm.rmse.toFixed(1)}</span>
                                         <div 
-                                          className="w-full bg-gradient-to-t from-blue-500 to-blue-400 rounded-t transition-all"
+                                          className="w-full max-w-[24px] bg-gradient-to-t from-blue-500 to-blue-400 rounded-t transition-all mx-auto"
                                           style={{ height: `${barHeight}px` }}
                                         />
-                                        <span className="text-[8px] text-slate-500 mt-0.5">h{hm.horizon_step}</span>
+                                        <span className="text-[6px] sm:text-[8px] text-slate-500 mt-0.5">{hm.horizon_step}</span>
                                       </div>
                                     );
                                   })}
                                 </div>
-                                <div className="flex justify-between text-[10px] text-slate-500">
+                                <div className="flex justify-between text-[9px] sm:text-[10px] text-slate-500">
                                   <span>h=1: RMSE {horizonMetrics[0]?.rmse.toFixed(2)}</span>
                                   <span>h={horizonMetrics.length}: RMSE {horizonMetrics[horizonMetrics.length - 1]?.rmse.toFixed(2)}</span>
                                 </div>

@@ -15,6 +15,24 @@ import warnings
 import pandas as pd
 warnings.filterwarnings('ignore')
 
+# Helper function to convert numpy types to native Python types for JSON serialization
+def numpy_to_native(obj: Any) -> Any:
+    """Recursively convert numpy types to Python native types."""
+    if isinstance(obj, np.ndarray):
+        return [numpy_to_native(x) for x in obj.tolist()]
+    elif isinstance(obj, (np.int64, np.int32, np.int16, np.int8)):
+        return int(obj)
+    elif isinstance(obj, (np.float64, np.float32, np.float16)):
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, dict):
+        return {k: numpy_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [numpy_to_native(x) for x in obj]
+    else:
+        return obj
+
 # Import modular components
 from utils.date_utils import detect_frequency, parse_dates_flexible, filter_by_date_range
 from utils.features import (
@@ -22,6 +40,12 @@ from utils.features import (
     TemporalFeatureConfig, 
     ExogenousFeatureConfig, 
     DerivedFeatureConfig
+)
+from utils.analysis import (
+    suggest_lags,
+    detect_outliers,
+    detect_trend,
+    compute_stationarity_indicators
 )
 from models import (
     train_lag,
@@ -143,11 +167,29 @@ class NormalizedDataPoint(BaseModel):
     date: str
     value: float
 
+# Advanced analysis schemas
+class LagSuggestion(BaseModel):
+    suggested_lags: List[int]
+    acf: List[float]
+    pacf: List[float]
+    confidence_interval: float
+    significant_lags: List[Dict[str, Any]]
+    seasonality: Dict[str, Any]
+    n_observations: int
+
+class DataAlert(BaseModel):
+    type: str  # 'warning', 'info', 'error'
+    category: str  # 'outliers', 'missing', 'trend', 'stationarity'
+    message: str
+    details: Optional[Dict[str, Any]] = None
+
 class DatasetAnalysisResponse(BaseModel):
     status: str
     stats: Optional[DatasetStats] = None
     normalized_data: Optional[List[NormalizedDataPoint]] = None
     available_columns: Optional[List[ColumnInfo]] = None
+    lag_analysis: Optional[LagSuggestion] = None
+    alerts: Optional[List[DataAlert]] = None
     message: Optional[str] = None
 
 # ============================================================================
@@ -272,11 +314,115 @@ async def analyze_dataset(request: DatasetAnalysisRequest, _: None = Depends(ver
                 sample_values=sample_vals
             ))
         
+        # ====================================================================
+        # ADVANCED ANALYSIS: ACF/PACF, Outliers, Trend, Stationarity
+        # ====================================================================
+        alerts: List[DataAlert] = []
+        lag_analysis = None
+        
+        # Get clean numpy array for analysis
+        target_values = valid_target.to_numpy()
+        
+        if len(target_values) >= 20:
+            # Lag suggestion with ACF/PACF
+            try:
+                lag_result = suggest_lags(target_values, frequency=freq_code, max_lags=20)
+                # Convert numpy types to native Python for JSON serialization
+                lag_result = numpy_to_native(lag_result)
+                lag_analysis = LagSuggestion(
+                    suggested_lags=lag_result["suggested_lags"],
+                    acf=lag_result["acf"],
+                    pacf=lag_result["pacf"],
+                    confidence_interval=lag_result["confidence_interval"],
+                    significant_lags=lag_result["significant_lags"],
+                    seasonality=lag_result["seasonality"],
+                    n_observations=lag_result["n_observations"]
+                )
+                
+                # Seasonality alert
+                if lag_result["seasonality"].get("detected"):
+                    period_label = lag_result["seasonality"].get("period_label", "")
+                    strength = lag_result["seasonality"].get("strength", 0)
+                    alerts.append(DataAlert(
+                        type="info",
+                        category="seasonality",
+                        message=f"Seasonality detected: {period_label} pattern (strength: {strength:.2f})",
+                        details=lag_result["seasonality"]
+                    ))
+            except Exception as e:
+                print(f"Lag analysis failed: {e}")
+            
+            # Outlier detection
+            try:
+                outlier_result = numpy_to_native(detect_outliers(target_values, method="iqr"))
+                if outlier_result["count"] > 0:
+                    pct = outlier_result["percentage"]
+                    alert_type = "warning" if pct > 5 else "info"
+                    alerts.append(DataAlert(
+                        type=alert_type,
+                        category="outliers",
+                        message=f"{outlier_result['count']} outliers detected ({pct:.1f}% of data)",
+                        details=outlier_result
+                    ))
+            except Exception as e:
+                print(f"Outlier detection failed: {e}")
+            
+            # Trend detection
+            try:
+                trend_result = numpy_to_native(detect_trend(target_values))
+                if trend_result["detected"]:
+                    direction = trend_result["direction"]
+                    strength = trend_result["strength"]
+                    alerts.append(DataAlert(
+                        type="info",
+                        category="trend",
+                        message=f"{strength.capitalize()} {direction} trend detected",
+                        details=trend_result
+                    ))
+            except Exception as e:
+                print(f"Trend detection failed: {e}")
+            
+            # Stationarity check
+            try:
+                stat_result = numpy_to_native(compute_stationarity_indicators(target_values))
+                if stat_result.get("likely_stationary") is False:
+                    alerts.append(DataAlert(
+                        type="warning",
+                        category="stationarity",
+                        message="Series may be non-stationary. Consider differencing for ARIMA.",
+                        details=stat_result
+                    ))
+            except Exception as e:
+                print(f"Stationarity check failed: {e}")
+        
+        # Missing data alerts
+        if missing_dates > 0:
+            pct = (missing_dates / df.height) * 100
+            alert_type = "warning" if pct > 10 else "info"
+            alerts.append(DataAlert(
+                type=alert_type,
+                category="missing",
+                message=f"{missing_dates} missing dates detected ({pct:.1f}%)",
+                details={"missing_count": missing_dates, "percentage": pct}
+            ))
+        
+        if missing_target > 0:
+            pct = (missing_target / df.height) * 100
+            alert_type = "warning" if pct > 5 else "info"
+            alerts.append(DataAlert(
+                type=alert_type,
+                category="missing",
+                message=f"{missing_target} missing target values ({pct:.1f}%)",
+                details={"missing_count": missing_target, "percentage": pct}
+            ))
+        
         return DatasetAnalysisResponse(
             status="success",
             stats=stats,
             normalized_data=normalized_data,
-            available_columns=available_columns
+            available_columns=available_columns,
+            lag_analysis=lag_analysis,
+            alerts=alerts if alerts else None
         )
         
     except Exception as e:
