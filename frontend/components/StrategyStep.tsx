@@ -612,9 +612,12 @@ export default function StrategyStep({
       const endDate = new Date(predictionRanges[0].end);
       // Count actual data points in the validation range (inclusive)
       if (fullData && fullData.length > 0 && data?.dateColumn) {
+        // Compare only the date part (YYYY-MM-DD) to avoid issues with time
+        const startStr = predictionRanges[0].start;
+        const endStr = predictionRanges[0].end;
         const validationPoints = fullData.filter(row => {
-          const rowDate = new Date(row[data.dateColumn] as string);
-          return rowDate >= startDate && rowDate <= endDate;
+          const rowDateStr = (row[data.dateColumn] as string)?.slice(0, 10); // YYYY-MM-DD
+          return rowDateStr >= startStr && rowDateStr <= endStr;
         }).length;
         // The max forecast horizon should be exactly the number of validation points (inclusive)
         if (validationPoints > 0) {
