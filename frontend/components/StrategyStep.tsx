@@ -607,48 +607,44 @@ export default function StrategyStep({
     if (predictionRanges.length === 0 || !predictionRanges[0].start || !predictionRanges[0].end) {
       return 30; // Default fallback
     }
-    
     try {
       const startDate = new Date(predictionRanges[0].start);
       const endDate = new Date(predictionRanges[0].end);
-      
-      // Count actual data points in the validation range
+      // Count actual data points in the validation range (inclusive)
       if (fullData && fullData.length > 0 && data?.dateColumn) {
         const validationPoints = fullData.filter(row => {
           const rowDate = new Date(row[data.dateColumn] as string);
           return rowDate >= startDate && rowDate <= endDate;
         }).length;
-        
+        // The max forecast horizon should be exactly the number of validation points (inclusive)
         if (validationPoints > 0) {
           return Math.max(1, Math.min(365, validationPoints));
         }
       }
-      
       // Fallback: estimate based on frequency if no data
       const diffTime = Math.abs(endDate.getTime() - startDate.getTime());
       const frequency = data?.frequency || 'D';
-      
       let estimatedPoints: number;
       switch (frequency) {
         case 'min':
-          estimatedPoints = Math.ceil(diffTime / (1000 * 60));
+          estimatedPoints = Math.floor(diffTime / (1000 * 60)) + 1;
           break;
         case 'H':
-          estimatedPoints = Math.ceil(diffTime / (1000 * 60 * 60));
+          estimatedPoints = Math.floor(diffTime / (1000 * 60 * 60)) + 1;
           break;
         case 'D':
-          estimatedPoints = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          estimatedPoints = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
           break;
         case 'W':
-          estimatedPoints = Math.ceil(diffTime / (1000 * 60 * 60 * 24 * 7));
+          estimatedPoints = Math.floor(diffTime / (1000 * 60 * 60 * 24 * 7)) + 1;
           break;
         case 'M':
-          estimatedPoints = Math.ceil(diffTime / (1000 * 60 * 60 * 24 * 30));
+          estimatedPoints = Math.floor(diffTime / (1000 * 60 * 60 * 24 * 30)) + 1;
           break;
         default:
-          estimatedPoints = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          estimatedPoints = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
       }
-      
+      // The +1 ensures the interval is inclusive
       return Math.max(1, Math.min(365, estimatedPoints));
     } catch {
       return 30;
