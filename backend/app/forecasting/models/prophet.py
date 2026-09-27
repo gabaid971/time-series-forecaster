@@ -76,6 +76,11 @@ class ProphetForecaster(Forecaster):
     def fit(self, df: pl.DataFrame, train_rows: np.ndarray) -> None:
         train = self._prophet_frame(df, train_rows, with_target=True)
         if train.empty:
+            if self.regressor_lags and max(self.regressor_lags) >= len(train_rows):
+                raise ValueError(
+                    f"Not enough data: the lag regressor {max(self.regressor_lags)} is not shorter than "
+                    f"the {len(train_rows)} training rows."
+                )
             raise ValueError("No training data after filtering by date ranges")
         self.model = Prophet(
             daily_seasonality=self.params.daily_seasonality,

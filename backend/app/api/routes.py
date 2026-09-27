@@ -14,12 +14,15 @@ from app.api.limits import RateLimiter, TrainingSlots, client_ip
 from app.api.schemas import (
     DatasetAnalysisRequest,
     DatasetAnalysisResponse,
+    ForecastRequest,
+    ForecastResponse,
     TrainingRequest,
     TrainingResponse,
 )
 from app.config import settings
 from app.forecasting.analysis import analyze_dataset
 from app.forecasting.data import load_frame
+from app.forecasting.future import forecast_models
 from app.forecasting.models import ForecastContext
 from app.forecasting.training import train_models
 
@@ -87,3 +90,25 @@ def train(request: TrainingRequest, http_request: Request):
             raise HTTPException(status_code=422, detail=str(e))
 
     return TrainingResponse(status="success", results=results, message=f"Trained {len(results)} model(s)")
+
+
+@router.post("/forecast", response_model=ForecastResponse)
+def forecast(request: ForecastRequest, http_request: Request):
+    """
+    Retrain the given (validated) model configurations on the whole history and
+    forecast the next `steps` points after the last date.
+    """
+    train_limiter.check(client_ip(http_request))
+    check_dataset_size(len(request.data))
+    if len(request.models) > settings.max_models:
+        raise HTTPException(status_code=413, detail=f"Too many models: {len(request.models)} (max {settings.max_models})")
+
+    with training_slots.acquire():
+        deadline = time.monotonic() + settings.train_time_budget_s
+        try:
+            df = load_frame(request.data, request.date_column, request.target_column)
+            output = forecast_models(df, request.date_column, request.target_column, request.models, request.steps, deadline)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+    return ForecastResponse(status="success", **output)

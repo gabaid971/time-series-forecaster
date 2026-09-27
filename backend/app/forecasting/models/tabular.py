@@ -93,7 +93,12 @@ class TabularForecaster(Forecaster):
             frame = frame.with_columns(pl.col(target).alias("__y"))
         frame = frame.drop_nulls(subset=self.feature_names + ["__y"])
         if frame.height == 0:
-            raise ValueError("Not enough data after creating features")
+            if self.lookback >= len(train_rows):
+                raise ValueError(
+                    f"Not enough data: the longest lag ({self.lookback}) is not shorter than "
+                    f"the {len(train_rows)} training rows, so no row has all its inputs."
+                )
+            raise ValueError("Not enough data after creating features (missing values in the inputs)")
 
         X = frame.select(self.feature_names).to_numpy()
         y = frame["__y"].to_numpy()

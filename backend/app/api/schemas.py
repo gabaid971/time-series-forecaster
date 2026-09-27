@@ -78,6 +78,37 @@ class TrainingResponse(BaseModel):
     message: Optional[str] = None
 
 
+class ForecastRequest(BaseModel):
+    """Retrain models on the whole history and forecast the next `steps` points."""
+    data: List[Dict[str, Any]]
+    date_column: str
+    target_column: str
+    steps: int = Field(ge=1, le=1000)
+    models: List[ModelConfig] = Field(min_length=1)
+
+
+class FuturePoint(BaseModel):
+    date: str
+    prediction: Optional[float] = None  # None when the model could not forecast this step
+    step: int
+
+
+class ForecastModelResult(BaseModel):
+    model_id: str
+    model_name: str
+    forecast: List[FuturePoint] = []
+    execution_time: Optional[float] = None
+    warning: Optional[str] = None  # E.g. the forecast diverges
+    error: Optional[str] = None
+
+
+class ForecastResponse(BaseModel):
+    status: str
+    frequency: str
+    last_date: str
+    results: List[ForecastModelResult]
+
+
 class DatasetAnalysisRequest(BaseModel):
     data: List[Dict[str, Any]]
     date_column: str
