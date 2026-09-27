@@ -4,6 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 from datetime import datetime, timedelta
 import numpy as np
+from app.api import routes
+from app.api.limits import RateLimiter, TrainingSlots
 from app.config import settings
 from app.main import app
 
@@ -283,6 +285,27 @@ class TestCors:
             "Origin": "https://evil.example.com", "Access-Control-Request-Method": "POST"
         })
         assert "access-control-allow-origin" not in response.headers
+
+
+class TestAbuseProtection:
+    """Rate limiting per client and concurrent training cap."""
+
+    def test_rate_limit(self, client, sample_data, monkeypatch):
+        monkeypatch.setattr(routes, "analyze_limiter", RateLimiter(max_requests=2))
+        payload = {"data": sample_data, "date_column": "date", "target_column": "value"}
+        assert client.post("/analyze", json=payload).status_code == 200
+        assert client.post("/analyze", json=payload).status_code == 200
+        response = client.post("/analyze", json=payload)
+        assert response.status_code == 429
+        assert "Retry-After" in response.headers
+
+    def test_server_busy(self, client, sample_data, monkeypatch):
+        slots = TrainingSlots(max_concurrent=1, timeout_s=0.01)
+        monkeypatch.setattr(routes, "training_slots", slots)
+        lag = {"id": "l", "type": "LAG", "name": "L", "params": {"lag": 1}}
+        with slots.acquire():  # Another training is running
+            response = client.post("/train", json=_train_payload(sample_data, [lag]))
+        assert response.status_code == 503
 
 
 class TestRequestErrors:

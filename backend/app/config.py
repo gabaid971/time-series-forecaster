@@ -20,6 +20,15 @@ class Settings:
     max_rows: int = int(os.environ.get("MAX_ROWS", "100000"))
     max_models: int = int(os.environ.get("MAX_MODELS", "10"))
 
+    # Requests per minute and per client IP
+    analyze_rate_limit: int = int(os.environ.get("ANALYZE_RATE_LIMIT_PER_MINUTE", "30"))
+    train_rate_limit: int = int(os.environ.get("TRAIN_RATE_LIMIT_PER_MINUTE", "10"))
+
+    # Training runs one request at a time (small instance: CPU and memory), within a time budget
+    max_concurrent_trainings: int = int(os.environ.get("MAX_CONCURRENT_TRAININGS", "1"))
+    train_queue_timeout_s: float = float(os.environ.get("TRAIN_QUEUE_TIMEOUT_S", "30"))
+    train_time_budget_s: float = float(os.environ.get("TRAIN_TIME_BUDGET_S", "60"))
+
     log_level: str = os.environ.get("LOG_LEVEL", "INFO")
 
 

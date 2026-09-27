@@ -1,5 +1,6 @@
 """Tests for forecasting models and the evaluation engine."""
 
+import time
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -254,14 +255,20 @@ class TestTrainingService:
         models = [type("M", (), {"id": t, "name": t, "type": t, "params": p})
                   for t, p in [("LAG", {"lag": 1}), ("LINEAR_REGRESSION", {"lags": [1]}), ("ARIMA", {})]]
         results = train_models(large_daily_df, ForecastContext("date", "value", 1), TRAINING, PREDICTION,
-                               models)
+                               models, deadline=time.monotonic() + 60)
         for result in results:
             assert set(result["metrics"]) == {"rmse", "mae", "mape", "r2", "msle", "execution_time"}
             for f in result["forecast"]:
                 assert set(f) == {"date", "prediction", "value", "horizon_step"}
                 assert isinstance(f["prediction"], float)
 
+    def test_time_budget(self, large_daily_df):
+        models = [type("M", (), {"id": "lag", "name": "Lag", "type": "LAG", "params": {}})]
+        results = train_models(large_daily_df, ForecastContext("date", "value", 1), TRAINING, PREDICTION,
+                               models, deadline=time.monotonic() - 1)
+        assert "time budget" in results[0]["error"]
+
     def test_empty_prediction_range_is_a_request_error(self, large_daily_df):
         with pytest.raises(ValueError, match="prediction ranges"):
             train_models(large_daily_df, ForecastContext("date", "value", 1), TRAINING,
-                         [DateRange("2030-01-01", "2030-02-01")], [])
+                         [DateRange("2030-01-01", "2030-02-01")], [], deadline=time.monotonic() + 60)

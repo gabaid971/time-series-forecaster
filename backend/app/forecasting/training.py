@@ -19,10 +19,12 @@ def train_models(
     training_ranges: List[Any],
     prediction_ranges: List[Any],
     models: List[Any],
+    deadline: float,
 ) -> List[Dict[str, Any]]:
     """
     Train and evaluate each model. A failing model does not stop the others: its
-    result carries the error.
+    result carries the error. Models not started before `deadline` (time.monotonic())
+    are skipped.
 
     Raises ValueError when the request itself is unusable (no training or prediction rows).
     """
@@ -37,6 +39,9 @@ def train_models(
     results = []
     for model_config in models:
         result = {"model_id": model_config.id, "model_name": model_config.name}
+        if time.monotonic() > deadline:
+            results.append({**result, "error": "Skipped: training time budget exceeded"})
+            continue
         start = time.perf_counter()
         try:
             model = create_forecaster(model_config.type, model_config.params, ctx)

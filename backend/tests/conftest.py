@@ -1,5 +1,11 @@
 """Shared fixtures for tests."""
 
+import os
+
+# Tests send many requests from the same client: relax rate limits (read at import time)
+os.environ.setdefault("ANALYZE_RATE_LIMIT_PER_MINUTE", "100000")
+os.environ.setdefault("TRAIN_RATE_LIMIT_PER_MINUTE", "100000")
+
 import pytest
 import polars as pl
 import numpy as np

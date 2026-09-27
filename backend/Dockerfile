@@ -23,5 +23,6 @@ COPY . .
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Run the application
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port $PORT"]
+# Run the application. Behind Render's proxy, --proxy-headers exposes the real client IP
+# (used for rate limiting)
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'"]

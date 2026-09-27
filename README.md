@@ -8,13 +8,14 @@ Web application for testing multiple time series forecasting methods with an int
 - **Backend**: FastAPI with Polars, scikit-learn, XGBoost, statsmodels and Prophet (deployed on Render)
 
 The browser calls the backend directly. The API is public (demo app): there is no API key,
-abuse is limited server-side (CORS, request size limits).
+abuse is limited server-side (CORS, request size limits, rate limiting, one training at a time
+within a time budget).
 
 Backend layout (`backend/app/`):
 
 | Module | Role |
 |---|---|
-| `api/` | Routes, request/response schemas |
+| `api/` | Routes, request/response schemas, abuse protection |
 | `forecasting/data.py` | Loading, date parsing, cleaning |
 | `forecasting/features.py` | Feature engineering and future-leakage validation |
 | `forecasting/models/` | Common `Forecaster` interface and one class per model (registry in `__init__.py`) |
@@ -66,6 +67,11 @@ Environment variables (all optional):
 | `MAX_BODY_MB` | `20` | Maximum request size |
 | `MAX_ROWS` | `100000` | Maximum dataset rows |
 | `MAX_MODELS` | `10` | Maximum models per training request |
+| `ANALYZE_RATE_LIMIT_PER_MINUTE` | `30` | `/analyze` requests per minute and client IP |
+| `TRAIN_RATE_LIMIT_PER_MINUTE` | `10` | `/train` requests per minute and client IP |
+| `MAX_CONCURRENT_TRAININGS` | `1` | Trainings running at the same time (others wait) |
+| `TRAIN_QUEUE_TIMEOUT_S` | `30` | Maximum wait for a training slot before answering 503 |
+| `TRAIN_TIME_BUDGET_S` | `60` | Models not started within this budget are skipped |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
 ### Frontend
