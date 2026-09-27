@@ -10,6 +10,9 @@ sys.path.insert(0, '/home/gabaid/workspace/time-series-forecaster/backend')
 from models.lag import train_lag
 from models.linear_regression import train_linear_regression
 from models.arima import train_arima
+from models.prophet_model import train_prophet, PROPHET_AVAILABLE
+from utils.validation import block_recursive_forecast
+from utils.features import FeatureConfig
 
 
 class DateRange:
@@ -310,3 +313,71 @@ class TestModelMetricsFormat:
             assert "prediction" in forecast
             assert "value" in forecast
             assert isinstance(forecast["prediction"], float)
+
+
+class TestArimaGap:
+    """ARIMA must use actual observations between training end and prediction start."""
+
+    def test_gap_between_train_and_prediction(self):
+        dates = [datetime(2023, 1, 1) + timedelta(days=i) for i in range(300)]
+        df = pl.DataFrame({"date": dates, "value": [float(i) for i in range(300)]})
+
+        result = train_arima(
+            df=df, date_col="date", target_col="value",
+            training_ranges=[DateRange("2023-01-01", "2023-06-01")],
+            prediction_ranges=[DateRange("2023-09-01", "2023-09-10")],
+            params={"p": 1, "d": 1, "q": 0}, horizon=5
+        )
+
+        first = result["forecast"][0]
+        # Linear series: the first prediction must be close to the actual value (243),
+        # not to the end of training (~151)
+        assert abs(first["prediction"] - first["value"]) < 5
+
+
+class TestRecursiveForecastSkippedStep:
+    """A skipped step must not make later steps fall back to actual values."""
+
+    def test_skipped_step_propagates(self):
+        class Identity:
+            def predict(self, X):
+                return X[:, 0]
+
+        n = 10
+        df = pl.DataFrame({
+            "date": [datetime(2023, 1, 1) + timedelta(days=i) for i in range(n)],
+            "value": [float(i) for i in range(n)],
+            "target_lag_1": [None] + [float(i) for i in range(n - 1)],
+            "other": [1.0] * 5 + [None] + [1.0] * 4,  # missing at index 5 -> step 2 skipped
+        })
+        forecasts = block_recursive_forecast(
+            model=Identity(), df=df, date_col="date", target_col="value",
+            feature_names=["target_lag_1", "other"], feature_config=FeatureConfig(target_lags=[1]),
+            horizon=3, pred_start_idx=4, pred_end_idx=6
+        )
+        # Step 1 (idx 4) predicted, step 2 (idx 5) skipped, step 3 (idx 6) needs step 2 -> skipped
+        assert [f["step_in_block"] for f in forecasts] == [1]
+
+
+@pytest.mark.skipif(not PROPHET_AVAILABLE, reason="Prophet not installed")
+class TestProphetHorizon:
+    """Prophet reports metrics by horizon like the other models."""
+
+    def test_horizon_steps(self, large_daily_df):
+        result = train_prophet(
+            df=large_daily_df, date_col="date", target_col="value",
+            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
+            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
+            params={}, horizon=7
+        )
+        assert [f["horizon_step"] for f in result["forecast"][:8]] == [1, 2, 3, 4, 5, 6, 7, 1]
+        assert len(result["metrics_by_horizon"]) == 7
+
+    def test_short_lag_regressor_rejected(self, large_daily_df):
+        with pytest.raises(ValueError, match="< horizon 7"):
+            train_prophet(
+                df=large_daily_df, date_col="date", target_col="value",
+                training_ranges=[DateRange("2023-01-01", "2023-05-01")],
+                prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
+                params={"use_lag_regressors": True, "lag_regressors": [1, 7]}, horizon=7
+            )

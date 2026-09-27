@@ -12,7 +12,9 @@ from utils.features import (
     FeatureConfig, 
     TemporalFeatureConfig,
     ExogenousFeatureConfig,
-    DerivedFeatureConfig
+    DerivedFeatureConfig,
+    parse_feature_config,
+    validate_no_future_leakage
 )
 
 
@@ -202,3 +204,64 @@ class TestBuildFeatures:
         )
         
         assert len(feature_names) == 0
+
+
+class TestParseFeatureConfig:
+    """Tests for parse_feature_config."""
+
+    def test_lags_param_wins_over_stale_feature_config(self):
+        """Lags edited in the UI (params.lags) must not be ignored once feature_config exists."""
+        params = {"lags": [1, 2, 3], "feature_config": {"target_lags": [1, 7], "temporal": {"month": True}}}
+        config = parse_feature_config(params, default_lags=[1, 7])
+        assert config.target_lags == [1, 2, 3]
+        assert config.temporal.month is True
+
+    def test_defaults(self):
+        assert parse_feature_config({}, default_lags=[1, 7]).target_lags == [1, 7]
+        assert parse_feature_config({"lags": "1, 14"}, default_lags=[1]).target_lags == [1, 14]
+
+
+class TestValidateNoFutureLeakage:
+    """Features must be known at the forecast origin."""
+
+    def test_unknown_exogenous_short_lag_rejected(self):
+        config = FeatureConfig(exogenous=[ExogenousFeatureConfig(column="sensor", lags=[0, 1])])
+        with pytest.raises(ValueError, match=r"'sensor' lag\(s\) \[0, 1\] < horizon 7"):
+            validate_no_future_leakage(config, "value", horizon=7)
+
+    def test_unknown_exogenous_lag_zero_rejected_at_horizon_one(self):
+        config = FeatureConfig(exogenous=[ExogenousFeatureConfig(column="sensor", lags=[0])])
+        with pytest.raises(ValueError):
+            validate_no_future_leakage(config, "value", horizon=1)
+
+    def test_unknown_exogenous_long_lag_accepted(self):
+        config = FeatureConfig(exogenous=[ExogenousFeatureConfig(column="sensor", lags=[7, 14])])
+        validate_no_future_leakage(config, "value", horizon=7)
+
+    def test_known_in_advance_accepts_any_lag(self):
+        config = FeatureConfig(exogenous=[
+            ExogenousFeatureConfig(column="promo", lags=[0, 1], use_actual=True, known_in_advance=True)
+        ])
+        validate_no_future_leakage(config, "value", horizon=7)
+
+    def test_unknown_exogenous_actual_value_rejected(self):
+        config = FeatureConfig(exogenous=[ExogenousFeatureConfig(column="sensor", use_actual=True)])
+        with pytest.raises(ValueError, match="known in advance"):
+            validate_no_future_leakage(config, "value", horizon=1)
+
+    def test_derived_on_short_target_lag_rejected(self):
+        config = FeatureConfig(derived=[
+            DerivedFeatureConfig(operation="product", feature_a="target_lag_1", feature_b="month_sin")
+        ])
+        validate_no_future_leakage(config, "value", horizon=1)
+        with pytest.raises(ValueError, match="target_lag_1"):
+            validate_no_future_leakage(config, "value", horizon=3)
+
+    def test_derived_on_target_or_raw_unknown_column_rejected(self):
+        for operand in ["value", "sensor"]:
+            config = FeatureConfig(
+                exogenous=[ExogenousFeatureConfig(column="sensor", lags=[7])],
+                derived=[DerivedFeatureConfig(operation="sum", feature_a=operand, feature_b="month_sin")]
+            )
+            with pytest.raises(ValueError, match=operand):
+                validate_no_future_leakage(config, "value", horizon=7)

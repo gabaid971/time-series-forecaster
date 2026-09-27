@@ -119,11 +119,13 @@ function MiniSlider({
 function FeatureConfigPanel({ 
   model, 
   updateModelParams, 
-  availableColumns 
+  availableColumns,
+  forecastHorizon
 }: { 
   model: ModelConfig; 
   updateModelParams: (id: string, params: Record<string, unknown> | ((prev: Record<string, unknown>) => Record<string, unknown>)) => void;
   availableColumns: ColumnInfo[];
+  forecastHorizon: number;
 }) {
   const params = model.params as unknown as Record<string, unknown>;
   const featureConfig: FeatureConfig = (params.feature_config as FeatureConfig) || {
@@ -194,44 +196,68 @@ function FeatureConfigPanel({
             {numericColumns.slice(0, 4).map(col => {
               const exogConfig = featureConfig.exogenous?.find((e: ExogenousFeatureConfig) => e.column === col.name);
               const isEnabled = !!exogConfig;
-              
+              const isKnown = !!exogConfig?.known_in_advance;
+              // Unknown future values: lags < horizon would leak actuals into the evaluation
+              const shortLags = isEnabled && !isKnown ? exogConfig.lags.filter(l => l < forecastHorizon) : [];
+              const updateExog = (changes: Partial<ExogenousFeatureConfig>) => updateConfig(prev => ({
+                ...prev,
+                exogenous: (prev.exogenous || []).map((ex: ExogenousFeatureConfig) =>
+                  ex.column === col.name ? { ...ex, ...changes } : ex
+                )
+              }));
+
               return (
-                <div key={col.name} className="flex items-center gap-2">
-                  <input 
-                    type="checkbox" 
-                    checked={isEnabled}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        updateConfig(prev => ({
-                          ...prev,
-                          exogenous: [...(prev.exogenous || []), { column: col.name, lags: [0, 1], use_actual: false }]
-                        }));
-                      } else {
-                        updateConfig(prev => ({
-                          ...prev,
-                          exogenous: (prev.exogenous || []).filter((ex: ExogenousFeatureConfig) => ex.column !== col.name)
-                        }));
-                      }
-                    }}
-                    className="accent-amber-500 w-3 h-3" 
-                  />
-                  <span className={`text-[10px] truncate flex-1 ${isEnabled ? 'text-amber-400' : 'text-slate-500'}`}>{col.name}</span>
-                  {isEnabled && (
+                <div key={col.name}>
+                  <div className="flex items-center gap-2">
                     <input
-                      type="text"
-                      placeholder="0, 1, 7"
-                      defaultValue={exogConfig?.lags?.join(', ') || '0, 1'}
-                      onBlur={(e) => {
-                        const lags = parseLags(e.target.value);
-                        updateConfig(prev => ({
-                          ...prev,
-                          exogenous: (prev.exogenous || []).map((ex: ExogenousFeatureConfig) => 
-                            ex.column === col.name ? { ...ex, lags } : ex
-                          )
-                        }));
+                      type="checkbox"
+                      checked={isEnabled}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          updateConfig(prev => ({
+                            ...prev,
+                            exogenous: [...(prev.exogenous || []), { column: col.name, lags: [forecastHorizon], use_actual: false, known_in_advance: false }]
+                          }));
+                        } else {
+                          updateConfig(prev => ({
+                            ...prev,
+                            exogenous: (prev.exogenous || []).filter((ex: ExogenousFeatureConfig) => ex.column !== col.name)
+                          }));
+                        }
                       }}
-                      className="w-16 bg-black/30 border border-white/10 rounded px-1.5 py-0.5 text-[10px] text-slate-200 font-mono"
+                      className="accent-amber-500 w-3 h-3"
                     />
+                    <span className={`text-[10px] truncate flex-1 ${isEnabled ? 'text-amber-400' : 'text-slate-500'}`}>{col.name}</span>
+                    {isEnabled && (
+                      <>
+                        <button
+                          onClick={() => updateExog({ known_in_advance: !isKnown })}
+                          title="Future values are known at forecast time (calendar, planned promotions...). If not, only lags >= horizon are allowed."
+                          className={`px-1.5 py-0.5 text-[9px] rounded border transition-all ${
+                            isKnown
+                              ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                              : 'bg-white/5 text-slate-500 border-white/10 hover:border-white/20'
+                          }`}
+                        >
+                          Known ahead
+                        </button>
+                        <input
+                          key={exogConfig.lags.join(',')}
+                          type="text"
+                          placeholder={`${forecastHorizon}, ${forecastHorizon + 7}`}
+                          defaultValue={exogConfig.lags.join(', ')}
+                          onBlur={(e) => updateExog({ lags: parseLags(e.target.value) })}
+                          className={`w-16 bg-black/30 border rounded px-1.5 py-0.5 text-[10px] text-slate-200 font-mono ${
+                            shortLags.length > 0 ? 'border-red-500/50' : 'border-white/10'
+                          }`}
+                        />
+                      </>
+                    )}
+                  </div>
+                  {shortLags.length > 0 && (
+                    <p className="text-[9px] text-red-300 mt-0.5 ml-5">
+                      Lag {shortLags.join(', ')} &lt; horizon {forecastHorizon}: unknown at forecast time. Use lags ≥ {forecastHorizon} or mark as known ahead.
+                    </p>
                   )}
                 </div>
               );
@@ -247,12 +273,14 @@ function FeatureConfigPanel({
 function ModelForm({ 
   model, 
   defaultLags,
+  forecastHorizon,
   onRemove,
   onUpdateParams,
   availableColumns 
 }: { 
   model: ModelConfig;
   defaultLags: number[];
+  forecastHorizon: number;
   onRemove: () => void;
   onUpdateParams: (id: string, params: Record<string, unknown> | ((prev: Record<string, unknown>) => Record<string, unknown>)) => void;
   availableColumns: ColumnInfo[];
@@ -410,7 +438,7 @@ function ModelForm({
                   </div>
                 )}
                 
-                <FeatureConfigPanel model={model} updateModelParams={onUpdateParams} availableColumns={availableColumns} />
+                <FeatureConfigPanel model={model} updateModelParams={onUpdateParams} availableColumns={availableColumns} forecastHorizon={forecastHorizon} />
               </>
             );
           })()}
@@ -517,7 +545,7 @@ function ModelForm({
                   </div>
                 </div>
                 
-                <FeatureConfigPanel model={model} updateModelParams={onUpdateParams} availableColumns={availableColumns} />
+                <FeatureConfigPanel model={model} updateModelParams={onUpdateParams} availableColumns={availableColumns} forecastHorizon={forecastHorizon} />
               </>
             );
           })()}
@@ -852,6 +880,7 @@ export default function StrategyStep({
                   key={model.id}
                   model={model}
                   defaultLags={defaultLags}
+                  forecastHorizon={forecastHorizon}
                   onRemove={() => setSelectedModels(selectedModels.filter(m => m.id !== model.id))}
                   onUpdateParams={updateModelParams}
                   availableColumns={availableColumns}

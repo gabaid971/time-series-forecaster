@@ -116,6 +116,22 @@ class TestSuggestLags:
         assert 24 in result['suggested_lags'] or result['seasonality'].get('period') == 24
 
 
+class TestSuggestLagsMinuteData:
+    """Minute data uses the 'min' code returned by detect_frequency."""
+
+    def test_minute_data_hourly_cycle(self):
+        np.random.seed(0)
+        i = np.arange(3 * 1440)
+        series = 50 + 20 * np.sin(2 * np.pi * i / 60) + np.random.randn(len(i)) * 2
+
+        result = suggest_lags(series, frequency="min", max_lags=20)
+
+        assert 60 in result["suggested_lags"]
+        assert len(result["acf"]) >= 61
+        assert result["seasonality"]["detected"] is True
+        assert result["seasonality"]["period_label"] == "Hourly"
+
+
 class TestDetectOutliers:
     """Tests for outlier detection."""
     

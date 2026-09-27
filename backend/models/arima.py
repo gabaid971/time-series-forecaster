@@ -24,6 +24,10 @@ def train_arima(
     ARIMA is a univariate model - it only uses the target variable's history.
     
     Block-wise strategy:
+    - Coefficients are estimated once on the training ranges
+    - Before each prediction range, the model state is set from all actual
+      observations preceding it (apply(refit=False)), so a gap between training
+      and prediction is filled with actuals, like lag-based models do
     - Split prediction range into blocks of size `horizon`
     - For each block, forecast h steps ahead
     - Assign horizon_step 1..h to each prediction
@@ -63,18 +67,28 @@ def train_arima(
     all_actuals = []
     forecast_output = []
     
+    df_sorted = df.sort(date_col)
+
     for pr in prediction_ranges:
         pred_df = filter_by_date_range(df, date_col, pr.start, pr.end).sort(date_col)
-        
+
         if pred_df.height == 0:
             continue
-        
+
         y_actual = pred_df.select(target_col).to_numpy().flatten()
         dates = pred_df.select(date_col).to_series().to_list()
         n_total = len(y_actual)
-        
+
+        # Feed the model with every actual observation before the prediction range
+        y_history = (
+            df_sorted.filter(pl.col(date_col) < dates[0])
+            .select(target_col).to_numpy().flatten()
+        )
+        if len(y_history) == 0:
+            raise ValueError(f"No history before prediction range starting {pr.start}")
+        current_fitted = fitted.apply(y_history, refit=False)
+
         # Block-wise forecasting
-        current_fitted = fitted
         
         for block_start in range(0, n_total, horizon):
             block_end = min(block_start + horizon, n_total)

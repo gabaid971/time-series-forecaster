@@ -211,10 +211,21 @@ class TestTrainEndpoint:
             }
         )
         
-        # Should still return 200 with error in result
+        # Should still return 200 with error in result, and no fake metrics
         assert response.status_code == 200
         result = response.json()
         assert result["results"][0]["error"] is not None
+        assert result["results"][0]["metrics"] is None
+
+    def test_unknown_model_type_is_an_error(self, client, sample_data):
+        """An unknown model type should fail instead of returning zero metrics."""
+        response = client.post("/train", json=_train_payload(sample_data, [
+            {"id": "x", "type": "NBEATS", "name": "N-BEATS", "params": {}}
+        ]))
+
+        result = response.json()["results"][0]
+        assert "Unknown model type" in result["error"]
+        assert result["metrics"] is None
 
 
 def _train_payload(data, models, horizon=1):

@@ -7,7 +7,7 @@ import os
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import polars as pl
 import numpy as np
@@ -89,10 +89,7 @@ class DateRange(BaseModel):
 
 class ForecastStrategyConfig(BaseModel):
     """Configuration for multi-step forecasting."""
-    horizon: int = 1
-    mode: str = "direct"
-    sliding_window: Optional[bool] = False
-    window_size: Optional[int] = None
+    horizon: int = Field(default=1, ge=1)
 
 class DataConfig(BaseModel):
     target_column: str
@@ -137,7 +134,7 @@ class FeatureImportance(BaseModel):
 class ModelResult(BaseModel):
     model_id: str
     model_name: str
-    metrics: ModelMetrics
+    metrics: Optional[ModelMetrics] = None  # None when the model failed (see error)
     forecast: List[Dict[str, Any]]
     metrics_by_horizon: Optional[List[HorizonMetrics]] = None
     feature_importance: Optional[List[FeatureImportance]] = None
@@ -462,6 +459,7 @@ async def train_models(request: TrainingRequest):
     check_dataset_size(len(request.data))
     if len(request.models) > MAX_MODELS:
         raise HTTPException(status_code=413, detail=f"Too many models: {len(request.models)} (max {MAX_MODELS})")
+    horizon = request.data_config.forecast_strategy.horizon if request.data_config.forecast_strategy else 1
     try:
         df = pl.DataFrame(request.data, infer_schema_length=None)
         
@@ -542,7 +540,6 @@ async def train_models(request: TrainingRequest):
                         forecast_strategy=request.data_config.forecast_strategy
                     )
                 elif model_config.type == "ARIMA":
-                    horizon = request.data_config.forecast_strategy.horizon if request.data_config.forecast_strategy else 1
                     result = train_arima(
                         df=df,
                         date_col=date_col,
@@ -561,14 +558,11 @@ async def train_models(request: TrainingRequest):
                         target_col=target_col,
                         training_ranges=request.data_config.training_ranges,
                         prediction_ranges=request.data_config.prediction_ranges,
-                        params=model_config.params
+                        params=model_config.params,
+                        horizon=horizon
                     )
                 else:
-                    result = {
-                        "metrics": {"rmse": 0, "mae": 0, "mape": 0, "r2": 0, "msle": 0, "execution_time": 0},
-                        "forecast": [],
-                        "feature_importance": None
-                    }
+                    raise ValueError(f"Unknown model type: {model_config.type}")
                 
                 results.append(ModelResult(
                     model_id=model_config.id,
@@ -586,7 +580,7 @@ async def train_models(request: TrainingRequest):
                 results.append(ModelResult(
                     model_id=model_config.id,
                     model_name=model_config.name,
-                    metrics=ModelMetrics(rmse=0, mae=0, mape=0, r2=0, msle=0, execution_time=0),
+                    metrics=None,
                     forecast=[],
                     error=error_msg
                 ))

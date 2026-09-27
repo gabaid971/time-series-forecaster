@@ -2,7 +2,7 @@
 
 import polars as pl
 import numpy as np
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 
 
@@ -13,6 +13,9 @@ class ExogenousFeatureConfig(BaseModel):
     use_actual: bool = False       # Use actual value at prediction time
     delta_lag: Optional[int] = None  # Compute delta vs this lag
     pct_change_lag: Optional[int] = None  # Compute % change vs this lag
+    # True if future values are known at forecast time (calendar, planned promotions...).
+    # If False, only lags >= horizon are allowed (see validate_no_future_leakage).
+    known_in_advance: bool = False
 
 
 class DerivedFeatureConfig(BaseModel):
@@ -40,6 +43,91 @@ class FeatureConfig(BaseModel):
     temporal: TemporalFeatureConfig = TemporalFeatureConfig()
     exogenous: List[ExogenousFeatureConfig] = []
     derived: List[DerivedFeatureConfig] = []
+
+
+TEMPORAL_FEATURE_NAMES = {
+    "month_sin", "month_cos", "dow_sin", "dow_cos", "day_of_month", "week_of_year",
+    "year", "hour_sin", "hour_cos", "minute_of_day_sin", "minute_of_day_cos",
+}
+
+
+def parse_feature_config(params: Dict[str, Any], default_lags: List[int]) -> FeatureConfig:
+    """
+    Build a FeatureConfig from model params.
+
+    Target lags always come from params["lags"] when present: it is the field edited
+    in the UI, while feature_config.target_lags may be a stale copy.
+    """
+    lags = params.get("lags")
+    if isinstance(lags, str):
+        lags = [int(x.strip()) for x in lags.split(",")]
+
+    fc = params.get("feature_config")
+    if fc is None:
+        return FeatureConfig(target_lags=lags or default_lags)
+
+    return FeatureConfig(
+        target_lags=lags or fc.get("target_lags") or default_lags,
+        temporal=TemporalFeatureConfig(**fc.get("temporal", {})),
+        exogenous=[ExogenousFeatureConfig(**e) for e in fc.get("exogenous", [])],
+        derived=[DerivedFeatureConfig(**d) for d in fc.get("derived", [])]
+    )
+
+
+def validate_no_future_leakage(feature_config: FeatureConfig, target_col: str, horizon: int) -> None:
+    """
+    Reject features whose value would not be known at the forecast origin.
+
+    With a horizon h, the model predicts t+1..t+h knowing only data up to t.
+    A lag k of a variable is therefore available at every step only if k >= h,
+    unless the variable is known in advance (calendar, planned promotions...).
+    Target lags are fine: they are replaced by predictions in recursive forecasting.
+    """
+    errors = []
+    unknown_cols = set()
+
+    for exog in feature_config.exogenous:
+        if exog.known_in_advance:
+            continue
+        unknown_cols.add(exog.column)
+        short_lags = sorted(lag for lag in exog.lags if lag < horizon)
+        if short_lags:
+            errors.append(
+                f"'{exog.column}' lag(s) {short_lags} < horizon {horizon}: these values are not known "
+                f"at forecast time. Use lags >= {horizon} or mark the variable as known in advance."
+            )
+        if exog.use_actual or exog.delta_lag is not None or exog.pct_change_lag is not None:
+            errors.append(
+                f"'{exog.column}': current value, delta and % change require the variable "
+                f"to be marked as known in advance."
+            )
+
+    known_cols = {e.column for e in feature_config.exogenous if e.known_in_advance}
+
+    def operand_is_known(name: str) -> bool:
+        if name in TEMPORAL_FEATURE_NAMES:
+            return True
+        if name.startswith("target_lag_"):
+            # Derived features are not recomputed recursively, so they need lags >= horizon
+            return int(name.rsplit("_", 1)[-1]) >= horizon
+        for col in known_cols:
+            if name == col or name.startswith(col + "_"):
+                return True
+        for col in unknown_cols:
+            if name.startswith(col + "_lag_"):
+                return int(name.rsplit("_", 1)[-1]) >= horizon
+        return False  # Target itself, raw columns, or anything we can't prove is known
+
+    for derived in feature_config.derived:
+        for operand in (derived.feature_a, derived.feature_b):
+            if operand == target_col or not operand_is_known(operand):
+                errors.append(
+                    f"Derived feature operand '{operand}' is not known at forecast time "
+                    f"with horizon {horizon}."
+                )
+
+    if errors:
+        raise ValueError(" ".join(errors))
 
 
 def build_features(

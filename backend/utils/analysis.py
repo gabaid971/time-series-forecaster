@@ -98,15 +98,21 @@ def suggest_lags(
     
     Args:
         series: Time series values
-        frequency: Detected frequency code (D, H, T, W, M, etc.)
+        frequency: Detected frequency code (s, min, H, D, W, M), as returned by detect_frequency
         max_lags: Maximum number of lags to analyze
         
     Returns:
         Dictionary with suggested lags and analysis
     """
     n = len(series)
-    max_lag_compute = min(max_lags * 2, n // 3, 50)
-    
+    seasonal_lag = _get_seasonal_lag(frequency)
+
+    # Look far enough to see the expected seasonal lag (e.g. 60 for minute data)
+    max_lag_compute = max_lags * 2
+    if seasonal_lag:
+        max_lag_compute = max(max_lag_compute, seasonal_lag + 1)
+    max_lag_compute = min(max_lag_compute, n // 3)
+
     # Compute ACF and PACF
     acf_values = compute_acf(series, max_lag_compute)
     pacf_values = compute_pacf(series, max_lag_compute)
@@ -131,7 +137,6 @@ def suggest_lags(
     suggested = [x["lag"] for x in significant_lags[:5]]
     
     # Add seasonal lag based on frequency
-    seasonal_lag = _get_seasonal_lag(frequency)
     if seasonal_lag and seasonal_lag not in suggested and seasonal_lag <= max_lag_compute:
         suggested.append(seasonal_lag)
     
@@ -144,10 +149,13 @@ def suggest_lags(
     # Detect seasonality from ACF peaks
     seasonality = _detect_seasonality(acf_values, frequency)
     
+    # Return up to the seasonal lag so the seasonal peak is visible in the plots
+    n_returned = max(max_lags, seasonal_lag or 0) + 1
+
     return {
         "suggested_lags": suggested,
-        "acf": [round(v, 4) for v in acf_values[:max_lags + 1]],
-        "pacf": [round(v, 4) for v in pacf_values[:max_lags + 1]],
+        "acf": [round(v, 4) for v in acf_values[:n_returned]],
+        "pacf": [round(v, 4) for v in pacf_values[:n_returned]],
         "confidence_interval": round(confidence, 4),
         "significant_lags": significant_lags[:10],  # Top 10
         "seasonality": seasonality,
@@ -158,7 +166,7 @@ def suggest_lags(
 def _get_seasonal_lag(frequency: str) -> Optional[int]:
     """Get expected seasonal lag based on frequency."""
     seasonal_map = {
-        "T": 60,      # Minute -> hourly pattern
+        "min": 60,    # Minute -> hourly pattern
         "H": 24,      # Hourly -> daily pattern
         "D": 7,       # Daily -> weekly pattern
         "W": 52,      # Weekly -> yearly pattern (too long usually)
@@ -219,7 +227,7 @@ def _period_to_label(period: int, frequency: str) -> str:
             return "Daily"
         elif period == 168:
             return "Weekly"
-    elif frequency == "T":
+    elif frequency == "min":
         if period == 60:
             return "Hourly"
         elif period == 1440:

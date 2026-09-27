@@ -1,4 +1,5 @@
-export type Frequency = 'D' | 'W' | 'M' | 'H';
+// Codes returned by the backend frequency detection
+export type Frequency = 's' | 'min' | 'H' | 'D' | 'W' | 'M';
 
 // 1. Définition des données brutes
 export interface TimeSeriesData {
@@ -64,6 +65,9 @@ export interface ExogenousFeatureConfig {
   use_actual: boolean;      // Use actual value at prediction time
   delta_lag?: number;       // Compute delta vs this lag
   pct_change_lag?: number;  // Compute % change vs this lag
+  // Future values known at forecast time (calendar, planned promotions...).
+  // If false, the backend only accepts lags >= forecast horizon.
+  known_in_advance?: boolean;
 }
 
 export interface TemporalFeatureConfig {
@@ -114,13 +118,8 @@ export interface DateRange {
 }
 
 // Forecast strategy configuration
-export type ForecastMode = 'direct' | 'recursive';
-
 export interface ForecastStrategyConfig {
-  horizon: number;              // Number of steps to forecast ahead
-  mode: ForecastMode;           // 'direct' if horizon <= min(lags), else 'recursive'
-  sliding_window?: boolean;     // Whether to use sliding window validation
-  window_size?: number;         // Size of sliding window (if enabled)
+  horizon: number;              // Number of steps to forecast ahead (block size)
 }
 
 export interface TrainingRequest {
@@ -200,7 +199,7 @@ export interface ShapAnalysis {
 export interface ModelResult {
   model_id: string;
   model_name: string;
-  metrics: ModelMetrics;
+  metrics: ModelMetrics | null;  // null when the model failed (see error)
   forecast: ForecastPoint[];
   metrics_by_horizon?: HorizonMetrics[];  // Per-step metrics for multi-horizon
   feature_importance?: FeatureImportance[];

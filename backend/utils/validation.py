@@ -83,10 +83,11 @@ def block_recursive_forecast(
                     
                     # Which step in this block does this lag refer to?
                     lag_refers_to_step = step - lag
-                    
-                    if lag_refers_to_step > 0 and lag_refers_to_step in block_predictions:
-                        # Use prediction from earlier in THIS block (recursive)
-                        feature_values.append(block_predictions[lag_refers_to_step])
+
+                    if lag_refers_to_step > 0:
+                        # Use prediction from earlier in THIS block (recursive).
+                        # None if that step was skipped: never fall back to the actual value.
+                        feature_values.append(block_predictions.get(lag_refers_to_step))
                     else:
                         # Use actual value from dataframe (historical or previous blocks)
                         feature_values.append(row.get(feat_name, 0))
@@ -111,12 +112,14 @@ def block_recursive_forecast(
                 residual_feat = f"target_lag_{residual_lag}"
                 lag_refers_to_step = step - residual_lag
                 
-                if lag_refers_to_step > 0 and lag_refers_to_step in block_predictions:
-                    y_lag = block_predictions[lag_refers_to_step]
+                if lag_refers_to_step > 0:
+                    y_lag = block_predictions.get(lag_refers_to_step)
                 else:
                     y_lag = row.get(residual_feat, 0)
-                
-                y_pred = y_pred_raw + y_lag if y_lag is not None else y_pred_raw
+
+                if y_lag is None:
+                    continue
+                y_pred = y_pred_raw + y_lag
             else:
                 y_pred = y_pred_raw
             

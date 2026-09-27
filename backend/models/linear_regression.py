@@ -8,13 +8,7 @@ from sklearn.linear_model import LinearRegression
 
 from utils.metrics import calculate_metrics, calculate_metrics_by_horizon
 from utils.date_utils import filter_by_date_range
-from utils.features import (
-    build_features, 
-    FeatureConfig, 
-    TemporalFeatureConfig, 
-    ExogenousFeatureConfig, 
-    DerivedFeatureConfig
-)
+from utils.features import build_features, parse_feature_config, validate_no_future_leakage
 from utils.validation import block_recursive_forecast
 
 
@@ -46,22 +40,15 @@ def train_linear_regression(
     residual_lag = params.get("residual_lag", 1)
     standardize = params.get("standardize", False)
     
+    # Determine forecast horizon
+    horizon = 1
+    if forecast_strategy is not None:
+        horizon = getattr(forecast_strategy, 'horizon', 1)
+
     # Build feature config from params
-    if "feature_config" in params:
-        fc = params["feature_config"]
-        feature_config = FeatureConfig(
-            target_lags=fc.get("target_lags", [1, 7]),
-            temporal=TemporalFeatureConfig(**fc.get("temporal", {})),
-            exogenous=[ExogenousFeatureConfig(**e) for e in fc.get("exogenous", [])],
-            derived=[DerivedFeatureConfig(**d) for d in fc.get("derived", [])]
-        )
-    else:
-        # Legacy mode: just use lags param
-        lags = params.get("lags", [1, 7])
-        if isinstance(lags, str):
-            lags = [int(x.strip()) for x in lags.split(",")]
-        feature_config = FeatureConfig(target_lags=lags)
-    
+    feature_config = parse_feature_config(params, default_lags=[1, 7])
+    validate_no_future_leakage(feature_config, target_col, horizon)
+
     # Build features on full dataset
     df_features, feature_names = build_features(df.clone(), date_col, target_col, feature_config)
     
@@ -116,12 +103,7 @@ def train_linear_regression(
     # Train model
     model = LinearRegression()
     model.fit(X_train, y_train)
-    
-    # Determine forecast horizon
-    horizon = 1
-    if forecast_strategy is not None:
-        horizon = getattr(forecast_strategy, 'horizon', 1)
-    
+
     # Predict on prediction ranges
     all_predictions = []
     all_actuals = []

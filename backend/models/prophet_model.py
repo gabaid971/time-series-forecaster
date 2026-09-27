@@ -6,7 +6,7 @@ import polars as pl
 import pandas as pd
 from typing import Dict, Any, List
 
-from utils.metrics import calculate_metrics
+from utils.metrics import calculate_metrics, calculate_metrics_by_horizon
 from utils.date_utils import filter_by_date_range
 
 # Prophet is optional
@@ -23,12 +23,17 @@ def train_prophet(
     target_col: str,
     training_ranges: List[Any],
     prediction_ranges: List[Any],
-    params: Dict[str, Any]
+    params: Dict[str, Any],
+    horizon: int = 1
 ) -> Dict[str, Any]:
     """
     Train a Prophet model with optional lag regressors.
     Prophet decomposes series into trend + seasonality.
-    
+
+    Prophet is trained once and does not update with recent observations, so
+    horizon_step is simply the position within each block of `horizon` points.
+    Lag regressors must be >= horizon to stay known at forecast time.
+
     Note: Prophet has a bug with datetime64[us] (microseconds) precision.
     We force conversion to datetime64[ns] (nanoseconds) for proper seasonality detection.
     """
@@ -48,7 +53,15 @@ def train_prophet(
     lag_regressors = params.get("lag_regressors", [])
     if isinstance(lag_regressors, str):
         lag_regressors = [int(x.strip()) for x in lag_regressors.split(",")]
-    
+
+    if use_lag_regressors:
+        short_lags = sorted(lag for lag in lag_regressors if lag < horizon)
+        if short_lags:
+            raise ValueError(
+                f"Prophet lag regressor(s) {short_lags} < horizon {horizon}: these values are not "
+                f"known at forecast time. Use lags >= {horizon}."
+            )
+
     # Add lag columns to dataframe
     df_with_lags = df.clone().sort(date_col)
     regressor_names = []
@@ -137,16 +150,21 @@ def train_prophet(
         all_predictions.extend(y_pred)
         all_actuals.extend(y_actual)
         
-        for date, pred_val, actual_val in zip(dates, y_pred, y_actual):
+        for i, (date, pred_val, actual_val) in enumerate(zip(dates, y_pred, y_actual)):
             forecast_output.append({
                 date_col: date.isoformat() if hasattr(date, 'isoformat') else str(date),
                 "prediction": float(pred_val),
-                target_col: float(actual_val)
+                target_col: float(actual_val),
+                "horizon_step": i % horizon + 1
             })
-    
+
     # Metrics
     metrics = calculate_metrics(np.array(all_actuals), np.array(all_predictions)) if all_actuals else {"rmse": 0, "mae": 0, "mape": 0, "r2": 0, "msle": 0}
     metrics["execution_time"] = time.time() - start_time
+
+    metrics_by_horizon = None
+    if horizon > 1 and forecast_output:
+        metrics_by_horizon = calculate_metrics_by_horizon(forecast_output, target_col)
     
     # Feature importance approximation
     feature_importance = None
@@ -159,5 +177,6 @@ def train_prophet(
     return {
         "metrics": metrics,
         "forecast": forecast_output,
-        "feature_importance": feature_importance
+        "feature_importance": feature_importance,
+        "metrics_by_horizon": metrics_by_horizon
     }

@@ -140,6 +140,9 @@ export default function ForecastingPage() {
   const [isTraining, setIsTraining] = useState(false);
   const [results, setResults] = useState<ModelResult[]>([]);
   const [trainError, setTrainError] = useState<string | null>(null);
+  // Failed models have no metrics: they must never be ranked or used as chart reference
+  const successfulResults = results.filter(r => !r.error && r.metrics);
+  const bestRmse = successfulResults.length > 0 ? Math.min(...successfulResults.map(r => r.metrics!.rmse)) : null;
   
   // SHAP Modal State
   const [shapModal, setShapModal] = useState<{ 
@@ -193,16 +196,8 @@ export default function ForecastingPage() {
     setIsTraining(true);
     setResults([]);
     setTrainError(null);
-    
+
     try {
-      // Get min lag from models to determine forecast mode
-      const allLags: number[] = selectedModels.flatMap(m => {
-        const params = m.params as any;
-        return params.feature_config?.target_lags || params.lags || params.lag ? [params.lag] : [1];
-      });
-      const minLag = allLags.length > 0 ? Math.min(...allLags.filter(l => l > 0)) : 1;
-      const forecastMode = forecastHorizon <= minLag ? 'direct' : 'recursive';
-      
       // Use rawData for training (contains all columns including exogenous)
       const payload = {
         data: rawData,
@@ -213,8 +208,7 @@ export default function ForecastingPage() {
           training_ranges: trainingRanges,
           prediction_ranges: predictionRanges,
           forecast_strategy: {
-            horizon: forecastHorizon,
-            mode: forecastMode
+            horizon: forecastHorizon
           }
         },
         models: selectedModels
@@ -232,7 +226,7 @@ export default function ForecastingPage() {
       }
 
       const result = await response.json();
-      
+
       if (result.status === 'success') {
         setResults(result.results);
       } else {
@@ -328,7 +322,7 @@ export default function ForecastingPage() {
           target_column: data.targetColumn,
         }),
       });
-      
+
       if (!response.ok) {
         setAnalyzeError(await getErrorMessage(response));
         useLocalFallback();
@@ -791,12 +785,11 @@ export default function ForecastingPage() {
                     )}
 
                     {/* Best Model Card */}
-                    {results.length > 0 && (() => {
-                      // Find the model with minimum RMSE
-                      const bestModel = results.reduce((best, current) => 
-                        current.metrics.rmse < best.metrics.rmse ? current : best
-                      , results[0]);
-                      
+                    {successfulResults.length > 0 && (() => {
+                      // Find the model with minimum RMSE (failed models excluded)
+                      const bestModel = successfulResults.find(r => r.metrics!.rmse === bestRmse)!;
+                      const bestMetrics = bestModel.metrics!;
+
                       return (
                         <div className="bg-gradient-to-r from-amber-500/20 to-orange-600/20 border border-amber-500/30 rounded-xl p-4 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                           <div className="flex items-center gap-3 sm:gap-4">
@@ -811,11 +804,11 @@ export default function ForecastingPage() {
                           <div className="flex gap-6 sm:gap-8 sm:text-right">
                             <div>
                               <p className="text-slate-400 text-[10px] sm:text-xs uppercase">RMSE</p>
-                              <p className="text-lg sm:text-xl font-mono font-bold text-white">{bestModel.metrics.rmse.toFixed(2)}</p>
+                              <p className="text-lg sm:text-xl font-mono font-bold text-white">{bestMetrics.rmse.toFixed(2)}</p>
                             </div>
                             <div>
                               <p className="text-slate-400 text-[10px] sm:text-xs uppercase">R² Score</p>
-                              <p className="text-lg sm:text-xl font-mono font-bold text-emerald-400">{(bestModel.metrics.r2 * 100).toFixed(1)}%</p>
+                              <p className="text-lg sm:text-xl font-mono font-bold text-emerald-400">{(bestMetrics.r2 * 100).toFixed(1)}%</p>
                             </div>
                           </div>
                         </div>
@@ -823,7 +816,7 @@ export default function ForecastingPage() {
                     })()}
 
                     {/* Prediction Visualization */}
-                    {results.length > 0 && data && (
+                    {successfulResults.length > 0 && data && (
                       <div className="bg-white/5 border border-white/10 rounded-xl p-3 sm:p-4">
                         <div className="flex justify-between items-center mb-3 sm:mb-4 gap-2">
                           <h3 className="font-semibold text-sm sm:text-base text-white">Forecast Visualization</h3>
@@ -856,14 +849,14 @@ export default function ForecastingPage() {
                           </div>
                         </div>
                         <TimeSeriesChart 
-                          data={isDeltaMode ? results[0].forecast.map(row => {
+                          data={isDeltaMode ? successfulResults[0].forecast.map(row => {
                             // In delta mode, show zero line for actual
                             const rowData = row as any;
                             return { ...rowData, [data.targetColumn]: 0 };
-                          }) : results[0].forecast}
-                          dateColumn={data.dateColumn} 
+                          }) : successfulResults[0].forecast}
+                          dateColumn={data.dateColumn}
                           targetColumn={data.targetColumn}
-                          predictions={results.filter(r => !r.error).map(r => ({
+                          predictions={successfulResults.map(r => ({
                             name: r.model_name,
                             data: isDeltaMode ? r.forecast.map(row => {
                               // Calculate delta: prediction - actual
@@ -899,12 +892,9 @@ export default function ForecastingPage() {
                           </thead>
                           <tbody>
                             {(() => {
-                              const bestRmse = Math.min(...results.map(r => r.metrics.rmse));
                               return results.map((res) => {
-                                const isBest = res.metrics.rmse === bestRmse;
-                                
                                 // Show error row if model failed
-                                if (res.error) {
+                                if (res.error || !res.metrics) {
                                   return (
                                     <tr key={res.model_id} className="border-b border-white/5 bg-red-500/5">
                                       <td className="px-4 sm:px-6 py-3 font-medium text-red-400">{res.model_name}</td>
@@ -914,7 +904,9 @@ export default function ForecastingPage() {
                                     </tr>
                                   );
                                 }
-                                
+
+                                const isBest = res.metrics.rmse === bestRmse;
+
                                 return (
                                   <tr key={res.model_id} className={`border-b border-white/5 hover:bg-white/5 ${isBest ? 'bg-amber-500/5' : ''}`}>
                                     <td className="px-4 sm:px-6 py-3 font-medium text-white flex items-center gap-2">
@@ -942,12 +934,9 @@ export default function ForecastingPage() {
                     <div className="sm:hidden space-y-3">
                       <h3 className="font-semibold text-sm text-white">Model Leaderboard</h3>
                       {(() => {
-                        const bestRmse = Math.min(...results.map(r => r.metrics.rmse));
                         return results.map((res) => {
-                          const isBest = res.metrics.rmse === bestRmse;
-                          
                           // Show error if model failed
-                          if (res.error) {
+                          if (res.error || !res.metrics) {
                             return (
                               <div key={res.model_id} className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
                                 <div className="flex items-center gap-2 mb-2">
@@ -957,7 +946,9 @@ export default function ForecastingPage() {
                               </div>
                             );
                           }
-                          
+
+                          const isBest = res.metrics.rmse === bestRmse;
+
                           return (
                             <div key={res.model_id} className={`bg-white/5 border rounded-lg p-3 ${isBest ? 'border-amber-500/30 bg-amber-500/5' : 'border-white/10'}`}>
                               <div className="flex items-center gap-2 mb-2">
