@@ -1,23 +1,22 @@
 """Prophet model: trend + seasonality decomposition, with optional lag regressors."""
 
+import importlib.util
 import logging
-from typing import Annotated, Any, Dict, List, Literal, Union
+from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Literal, Union
 
 import numpy as np
-import pandas as pd
 import polars as pl
 from pydantic import Field, field_validator
 
 from app.forecasting.features import TargetLag
 from app.forecasting.models.base import Block, ForecastContext, Forecaster, ModelParams
 
-# Prophet is optional
-try:
-    from prophet import Prophet
-    PROPHET_AVAILABLE = True
-    logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
-except ImportError:
-    PROPHET_AVAILABLE = False
+if TYPE_CHECKING:
+    import pandas as pd
+
+# Prophet is optional, and imported only when used: with pandas it costs ~100 MB of
+# memory, too much to load at startup on a small instance
+PROPHET_AVAILABLE = importlib.util.find_spec("prophet") is not None
 
 
 class ProphetParams(ModelParams):
@@ -59,7 +58,9 @@ class ProphetForecaster(Forecaster):
             )
         self.regressor_names = [f"lag_{lag}" for lag in self.regressor_lags]
 
-    def _prophet_frame(self, df: pl.DataFrame, rows: np.ndarray, with_target: bool) -> pd.DataFrame:
+    def _prophet_frame(self, df: pl.DataFrame, rows: np.ndarray, with_target: bool) -> "pd.DataFrame":
+        import pandas as pd
+
         frame = df.with_columns(
             pl.col(self.ctx.target_col).shift(lag).alias(name)
             for lag, name in zip(self.regressor_lags, self.regressor_names)
@@ -74,6 +75,9 @@ class ProphetForecaster(Forecaster):
         return pdf
 
     def fit(self, df: pl.DataFrame, train_rows: np.ndarray) -> None:
+        from prophet import Prophet
+        logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
+
         train = self._prophet_frame(df, train_rows, with_target=True)
         if train.empty:
             if self.regressor_lags and max(self.regressor_lags) >= len(train_rows):

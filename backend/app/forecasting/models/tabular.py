@@ -188,24 +188,26 @@ class LinearRegressionForecaster(TabularForecaster):
     Params = LinearRegressionParams
 
     def fit_estimator(self, X, y, train_frame) -> None:
-        from sklearn.linear_model import LinearRegression
-
         self.means = self.stds = None
         if self.params.standardize:
             self.means = X.mean(axis=0)
             self.stds = X.std(axis=0)
             self.stds[self.stds == 0] = 1
             X = (X - self.means) / self.stds
-        self.model = LinearRegression().fit(X, y)
+        # Ordinary least squares with intercept, like scikit-learn's LinearRegression
+        # (center, then minimum-norm least squares), without its ~75 MB of memory
+        x_offset, y_offset = X.mean(axis=0), y.mean()
+        self.coef, *_ = np.linalg.lstsq(X - x_offset, y - y_offset, rcond=None)
+        self.intercept = y_offset - x_offset @ self.coef
 
     def predict_estimator(self, X: np.ndarray) -> np.ndarray:
         if self.means is not None:
             X = (X - self.means) / self.stds
-        return self.model.predict(X)
+        return X @ self.coef + self.intercept
 
     def explain(self) -> Dict[str, Any]:
         # Importance = normalized absolute coefficients
-        abs_coefs = np.abs(self.model.coef_)
+        abs_coefs = np.abs(self.coef)
         total = abs_coefs.sum() or 1.0
         importance = [
             {"feature": name, "importance": float(c / total)} for name, c in zip(self.feature_names, abs_coefs)

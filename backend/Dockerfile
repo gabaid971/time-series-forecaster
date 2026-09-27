@@ -21,7 +21,9 @@ RUN uv sync --locked --no-dev
 # Copy application code
 COPY . .
 
-ENV PATH="/app/.venv/bin:$PATH"
+# Fewer glibc malloc arenas: lower memory with the API thread pool (free instance: 512 MB)
+ENV PATH="/app/.venv/bin:$PATH" \
+    MALLOC_ARENA_MAX=2
 
 # Run the application. Behind Render's proxy, --proxy-headers exposes the real client IP
 # (used for rate limiting)
