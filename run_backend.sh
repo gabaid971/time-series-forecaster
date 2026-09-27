@@ -1,6 +1,4 @@
 #!/bin/bash
-cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python main.py
+cd "$(dirname "$0")/backend"
+uv sync
+uv run python main.py

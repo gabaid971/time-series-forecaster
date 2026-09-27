@@ -2,8 +2,6 @@
 
 import pytest
 import numpy as np
-import sys
-sys.path.insert(0, '/home/gabaid/workspace/time-series-forecaster/backend')
 
 from utils.metrics import calculate_metrics, calculate_metrics_by_horizon
 

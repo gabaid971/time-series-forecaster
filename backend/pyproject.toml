@@ -1,0 +1,39 @@
+[project]
+name = "time-series-forecaster-backend"
+version = "2.0.0"
+description = "FastAPI backend for the Time Series Forecaster web app"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.141",
+    "uvicorn[standard]>=0.54",
+    "polars>=1.44",
+    "pandas>=3.0",
+    "numpy>=2.5",
+    "scikit-learn>=1.9",
+    "pyarrow>=25.0",
+    "xgboost>=3.4",
+    "statsmodels>=0.15",
+    "shap>=0.52",
+    "prophet>=1.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "httpx>=0.28",
+]
+
+[tool.uv]
+# Application, not a library: dependencies only, the project itself is not installed
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+]

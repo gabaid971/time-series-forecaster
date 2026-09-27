@@ -3,8 +3,6 @@
 import pytest
 import polars as pl
 from datetime import datetime, timedelta
-import sys
-sys.path.insert(0, '/home/gabaid/workspace/time-series-forecaster/backend')
 
 from utils.date_utils import detect_frequency, parse_dates_flexible, filter_by_date_range
 

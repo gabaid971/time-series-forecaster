@@ -604,4 +604,5 @@ if __name__ == "__main__":
     import uvicorn
     print("🚀 Starting Time Series Forecaster Backend...")
     print("📍 API docs available at: http://localhost:8000/docs")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Local development: auto-reload on code changes (production uses the uvicorn CLI, see Dockerfile)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

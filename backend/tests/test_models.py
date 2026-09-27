@@ -4,8 +4,6 @@ import pytest
 import polars as pl
 import numpy as np
 from datetime import datetime, timedelta
-import sys
-sys.path.insert(0, '/home/gabaid/workspace/time-series-forecaster/backend')
 
 from models.lag import train_lag
 from models.linear_regression import train_linear_regression
