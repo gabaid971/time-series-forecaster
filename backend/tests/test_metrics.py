@@ -3,7 +3,7 @@
 import pytest
 import numpy as np
 
-from utils.metrics import calculate_metrics, calculate_metrics_by_horizon
+from app.forecasting.metrics import calculate_metrics, calculate_metrics_by_horizon
 
 
 class TestCalculateMetrics:

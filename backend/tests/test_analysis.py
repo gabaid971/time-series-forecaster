@@ -2,7 +2,7 @@
 
 import pytest
 import numpy as np
-from utils.analysis import (
+from app.forecasting.analysis import (
     compute_acf,
     compute_pacf,
     suggest_lags,

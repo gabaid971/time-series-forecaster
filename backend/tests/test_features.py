@@ -5,7 +5,7 @@ import polars as pl
 import numpy as np
 from datetime import datetime, timedelta
 
-from utils.features import (
+from app.forecasting.features import (
     build_features, 
     FeatureConfig, 
     TemporalFeatureConfig,
@@ -247,13 +247,22 @@ class TestValidateNoFutureLeakage:
         with pytest.raises(ValueError, match="known in advance"):
             validate_no_future_leakage(config, "value", horizon=1)
 
-    def test_derived_on_short_target_lag_rejected(self):
+    def test_derived_on_target_lag_accepted(self):
+        """Derived features on target lags are recomputed recursively from predictions."""
         config = FeatureConfig(derived=[
             DerivedFeatureConfig(operation="product", feature_a="target_lag_1", feature_b="month_sin")
         ])
-        validate_no_future_leakage(config, "value", horizon=1)
-        with pytest.raises(ValueError, match="target_lag_1"):
-            validate_no_future_leakage(config, "value", horizon=3)
+        validate_no_future_leakage(config, "value", horizon=3)
+
+    def test_lag_bounds(self):
+        with pytest.raises(ValueError):
+            FeatureConfig(target_lags=[0])
+        with pytest.raises(ValueError):
+            FeatureConfig(target_lags=[100000])
+
+    def test_lookback(self):
+        config = FeatureConfig(target_lags=[1, 7], exogenous=[ExogenousFeatureConfig(column="x", lags=[14], delta_lag=30)])
+        assert config.lookback() == 30
 
     def test_derived_on_target_or_raw_unknown_column_rejected(self):
         for operand in ["value", "sensor"]:

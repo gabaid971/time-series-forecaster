@@ -4,7 +4,7 @@ import pytest
 import polars as pl
 from datetime import datetime, timedelta
 
-from utils.date_utils import detect_frequency, parse_dates_flexible, filter_by_date_range
+from app.forecasting.data import detect_frequency, parse_dates_flexible, filter_by_date_range
 
 
 class TestDetectFrequency:

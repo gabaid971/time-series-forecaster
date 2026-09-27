@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from main import app
+from app.main import app
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_DIR = Path(__file__).parent / "golden"

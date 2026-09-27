@@ -10,6 +10,18 @@ Web application for testing multiple time series forecasting methods with an int
 The browser calls the backend directly. The API is public (demo app): there is no API key,
 abuse is limited server-side (CORS, request size limits).
 
+Backend layout (`backend/app/`):
+
+| Module | Role |
+|---|---|
+| `api/` | Routes, request/response schemas |
+| `forecasting/data.py` | Loading, date parsing, cleaning |
+| `forecasting/features.py` | Feature engineering and future-leakage validation |
+| `forecasting/models/` | Common `Forecaster` interface and one class per model (registry in `__init__.py`) |
+| `forecasting/backtest.py` | Evaluation engine common to all models (blocks of `horizon` steps) |
+| `forecasting/training.py` | Trains and evaluates the requested models |
+| `forecasting/analysis.py` | Dataset analysis (ACF/PACF, seasonality, alerts) |
+
 ## Features
 
 - Upload CSV time series data, automatic frequency detection and data analysis
@@ -36,13 +48,15 @@ Requirements: [uv](https://docs.astral.sh/uv/) (installs Python 3.12 if needed) 
 ```bash
 cd backend
 uv sync
-uv run python main.py
+uv run python -m app
 ```
 
 The API will be available at `http://localhost:8000` (auto-reload on code changes).
 API documentation: `http://localhost:8000/docs`
 
-Run the tests with `uv run pytest`.
+Run the tests with `uv run pytest`. `tests/test_golden.py` freezes end-to-end results on reference
+scenarios; after an intended change, regenerate them with `UPDATE_GOLDEN=1 uv run pytest tests/test_golden.py`
+and review the diff.
 
 Environment variables (all optional):
 
@@ -52,6 +66,7 @@ Environment variables (all optional):
 | `MAX_BODY_MB` | `20` | Maximum request size |
 | `MAX_ROWS` | `100000` | Maximum dataset rows |
 | `MAX_MODELS` | `10` | Maximum models per training request |
+| `LOG_LEVEL` | `INFO` | Logging level |
 
 ### Frontend
 

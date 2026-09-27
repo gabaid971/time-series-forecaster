@@ -1,16 +1,17 @@
-"""Tests for model training functions."""
+"""Tests for forecasting models and the evaluation engine."""
 
-import pytest
-import polars as pl
-import numpy as np
 from datetime import datetime, timedelta
 
-from models.lag import train_lag
-from models.linear_regression import train_linear_regression
-from models.arima import train_arima
-from models.prophet_model import train_prophet, PROPHET_AVAILABLE
-from utils.validation import block_recursive_forecast
-from utils.features import FeatureConfig
+import numpy as np
+import polars as pl
+import pytest
+
+from app.forecasting.backtest import make_blocks, run_backtest, training_rows
+from app.forecasting.models import Block, ForecastContext, create_forecaster
+from app.forecasting.models.arima import ArimaForecaster, ArimaParams
+from app.forecasting.models.prophet import PROPHET_AVAILABLE
+from app.forecasting.models.tabular import LinearRegressionForecaster, LinearRegressionParams
+from app.forecasting.training import train_models
 
 
 class DateRange:
@@ -20,10 +21,17 @@ class DateRange:
         self.end = end
 
 
-class ForecastStrategy:
-    """Mock ForecastStrategy for tests."""
-    def __init__(self, horizon=1):
-        self.horizon = horizon
+TRAINING = [DateRange("2023-01-01", "2023-05-01")]
+PREDICTION = [DateRange("2023-05-01", "2023-06-01")]
+
+
+def evaluate(df, model_type, params, horizon=1, training=TRAINING, prediction=PREDICTION):
+    """Fit a model and evaluate it like the /train endpoint does."""
+    ctx = ForecastContext(date_col="date", target_col="value", horizon=horizon)
+    model = create_forecaster(model_type, params, ctx)
+    model.fit(df, training_rows(df, "date", training))
+    result = run_backtest(model, df, make_blocks(df, "date", prediction, horizon), horizon)
+    return {**result, **model.explain()}
 
 
 @pytest.fixture
@@ -36,296 +44,175 @@ def large_daily_df():
         100 + 0.1 * i + 10 * np.sin(2 * np.pi * i / 7) + np.random.randn() * 2
         for i in range(200)
     ]
-    
-    return pl.DataFrame({
-        "date": dates,
-        "value": values
-    })
+    return pl.DataFrame({"date": dates, "value": values})
 
 
-class TestTrainLag:
-    """Tests for LAG model training."""
-    
+class TestLag:
+    """Tests for the LAG baseline."""
+
     def test_basic_training(self, large_daily_df):
-        """Should train and return valid metrics."""
-        result = train_lag(
-            df=large_daily_df,
-            date_col="date",
-            target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={"lag": 1}
-        )
-        
-        assert "metrics" in result
-        assert "forecast" in result
+        result = evaluate(large_daily_df, "LAG", {"lag": 1})
         assert result["metrics"]["rmse"] >= 0
         assert result["metrics"]["mae"] >= 0
         assert len(result["forecast"]) > 0
-    
-    def test_different_lags(self, large_daily_df):
-        """Different lag values should work."""
-        for lag in [1, 7, 14]:
-            result = train_lag(
-                df=large_daily_df,
-                date_col="date",
-                target_col="value",
-                training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-                prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-                params={"lag": lag}
-            )
-            
-            assert len(result["forecast"]) > 0
-    
+
+    def test_prediction_is_lagged_value(self, large_daily_df):
+        result = evaluate(large_daily_df, "LAG", {"lag": 7})
+        values = large_daily_df["value"].to_list()
+        first = result["forecast"][0]
+        row = large_daily_df["date"].dt.strftime("%Y-%m-%dT%H:%M:%S").to_list().index(first["date"])
+        assert first["prediction"] == pytest.approx(values[row - 7])
+
     def test_multi_horizon(self, large_daily_df):
-        """Multi-horizon should add horizon_step to forecasts."""
-        result = train_lag(
-            df=large_daily_df,
-            date_col="date",
-            target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={"lag": 1},
-            forecast_strategy=ForecastStrategy(horizon=7)
-        )
-        
-        assert "metrics_by_horizon" in result
-        assert len(result["metrics_by_horizon"]) > 0
-        
-        # Check horizon steps exist in forecasts
-        horizon_steps = set(f.get("horizon_step", 1) for f in result["forecast"])
-        assert len(horizon_steps) > 1
+        """Within a block, the lag model repeats its own predictions."""
+        result = evaluate(large_daily_df, "LAG", {"lag": 1}, horizon=7)
+        assert len(result["metrics_by_horizon"]) == 7
+        first_block = [f["prediction"] for f in result["forecast"][:7]]
+        assert len(set(first_block)) == 1
 
 
-class TestTrainLinearRegression:
-    """Tests for Linear Regression model training."""
-    
+class TestLinearRegression:
+    """Tests for Linear Regression."""
+
     def test_basic_training(self, large_daily_df):
-        """Should train and return valid metrics."""
-        result = train_linear_regression(
-            df=large_daily_df,
-            date_col="date",
-            target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={"lags": [1, 7]}
-        )
-        
-        assert "metrics" in result
-        assert "forecast" in result
-        assert "feature_importance" in result
-        assert len(result["feature_importance"]) > 0
-    
+        result = evaluate(large_daily_df, "LINEAR_REGRESSION", {"lags": [1, 7]})
+        assert len(result["forecast"]) > 0
+        assert len(result["feature_importance"]) == 2
+
     def test_with_temporal_features(self, large_daily_df):
-        """Should work with temporal features."""
-        result = train_linear_regression(
-            df=large_daily_df,
-            date_col="date",
-            target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={
-                "feature_config": {
-                    "target_lags": [1, 7],
-                    "temporal": {
-                        "day_of_week": True,
-                        "month": True
-                    }
-                }
-            }
-        )
-        
-        # Should have temporal features in importance
+        result = evaluate(large_daily_df, "LINEAR_REGRESSION", {
+            "feature_config": {"target_lags": [1, 7], "temporal": {"day_of_week": True, "month": True}}
+        })
         feature_names = [f["feature"] for f in result["feature_importance"]]
         assert any("dow" in f or "month" in f for f in feature_names)
-    
+
     def test_residual_mode(self, large_daily_df):
-        """Residual mode should work."""
-        result = train_linear_regression(
-            df=large_daily_df,
-            date_col="date",
-            target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={
-                "lags": [1, 7],
-                "target_mode": "residual",
-                "residual_lag": 1
-            }
-        )
-        
+        result = evaluate(large_daily_df, "LINEAR_REGRESSION", {"lags": [1, 7], "target_mode": "residual", "residual_lag": 1})
         assert len(result["forecast"]) > 0
-    
-    def test_standardization(self, large_daily_df):
-        """Standardization option should work."""
-        result = train_linear_regression(
-            df=large_daily_df,
-            date_col="date",
-            target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={
-                "lags": [1, 7],
-                "standardize": True
-            }
-        )
-        
-        assert len(result["forecast"]) > 0
-    
+
+    def test_standardization_does_not_change_predictions(self, large_daily_df):
+        raw = evaluate(large_daily_df, "LINEAR_REGRESSION", {"lags": [1, 7]})
+        std = evaluate(large_daily_df, "LINEAR_REGRESSION", {"lags": [1, 7], "standardize": True})
+        assert [f["prediction"] for f in std["forecast"]] == pytest.approx([f["prediction"] for f in raw["forecast"]])
+
     def test_multi_horizon_with_metrics(self, large_daily_df):
-        """Multi-horizon should provide per-horizon metrics."""
-        result = train_linear_regression(
-            df=large_daily_df,
-            date_col="date",
-            target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={"lags": [1, 7]},
-            forecast_strategy=ForecastStrategy(horizon=7)
-        )
-        
-        assert result["metrics_by_horizon"] is not None
+        result = evaluate(large_daily_df, "LINEAR_REGRESSION", {"lags": [1, 7]}, horizon=7)
         assert len(result["metrics_by_horizon"]) == 7
 
 
-class TestTrainARIMA:
-    """Tests for ARIMA model training."""
-    
+class TestXGBoost:
+    def test_training_and_shap(self, large_daily_df):
+        result = evaluate(large_daily_df, "XGBOOST", {
+            "lags": [1, 7], "n_estimators": 20, "feature_config": {"temporal": {"day_of_week": True}}
+        })
+        assert len(result["forecast"]) > 0
+        assert "day_of_week" in result["shap_analysis"]["temporal"]
+
+
+class TestRecursiveEngine:
+    """Guarantees of the recursive forecasting engine of tabular models."""
+
+    @staticmethod
+    def recording_model(df, params, horizon):
+        """Linear regression that records the features it is asked to predict on."""
+        ctx = ForecastContext(date_col="date", target_col="value", horizon=horizon)
+        model = LinearRegressionForecaster(LinearRegressionParams.model_validate(params), ctx)
+        model.fit(df, training_rows(df, "date", TRAINING))
+        model.seen = []
+        predict = model.predict_estimator
+        model.predict_estimator = lambda X: (model.seen.append(X.copy()), predict(X))[1]
+        return model
+
+    def test_derived_features_are_recursive(self, large_daily_df):
+        """A derived feature built on a target lag uses the predictions within the block."""
+        params = {"lags": [1], "feature_config": {"derived": [
+            {"operation": "sum", "feature_a": "target_lag_1", "feature_b": "target_lag_1", "alias": "double"}
+        ]}}
+        model = self.recording_model(large_daily_df, params, horizon=5)
+        model.predict_blocks(large_daily_df, [Block(150, 155)])
+        X = np.vstack(model.seen)
+        assert np.allclose(X[:, 1], 2 * X[:, 0])
+
+    def test_skipped_step_propagates(self):
+        """A step that cannot be predicted must not make later steps fall back to actual values."""
+        n = 120
+        df = pl.DataFrame({
+            "date": [datetime(2023, 1, 1) + timedelta(days=i) for i in range(n)],
+            "value": [float(i % 10) for i in range(n)],
+            "promo": [1.0] * 101 + [None] + [1.0] * (n - 102),  # missing at row 101 -> step 2 skipped
+        })
+        params = {"lags": [1], "feature_config": {"exogenous": [
+            {"column": "promo", "use_actual": True, "known_in_advance": True}
+        ]}}
+        ctx = ForecastContext(date_col="date", target_col="value", horizon=3)
+        model = create_forecaster("LINEAR_REGRESSION", params, ctx)
+        model.fit(df, training_rows(df, "date", [DateRange("2023-01-01", "2023-04-01")]))
+
+        predictions = model.predict_blocks(df, [Block(100, 103)])[0]
+        # Step 1 predicted, step 2 has no feature, step 3 needs the prediction of step 2
+        assert not np.isnan(predictions[0])
+        assert np.isnan(predictions[1]) and np.isnan(predictions[2])
+
+    def test_unknown_exogenous_hidden_inside_block(self):
+        """Even beyond the validated horizon, unknown exogenous values of the block are masked."""
+        n = 120
+        df = pl.DataFrame({
+            "date": [datetime(2023, 1, 1) + timedelta(days=i) for i in range(n)],
+            "value": [float(i % 10) for i in range(n)],
+            "sensor": [float(i) for i in range(n)],
+        })
+        params = {"lags": [1], "feature_config": {"exogenous": [{"column": "sensor", "lags": [1]}]}}
+        ctx = ForecastContext(date_col="date", target_col="value", horizon=1)
+        model = create_forecaster("LINEAR_REGRESSION", params, ctx)
+        model.fit(df, training_rows(df, "date", [DateRange("2023-01-01", "2023-04-01")]))
+
+        # Block of 3 rows while validated for horizon 1: sensor lag 1 of steps 2-3 is in the future
+        predictions = model.predict_blocks(df, [Block(100, 103)])[0]
+        assert not np.isnan(predictions[0])
+        assert np.isnan(predictions[1]) and np.isnan(predictions[2])
+
+
+class TestARIMA:
+    """Tests for ARIMA."""
+
     def test_basic_training(self, large_daily_df):
-        """Should train ARIMA and return valid metrics."""
-        result = train_arima(
-            df=large_daily_df,
-            date_col="date",
-            target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={"p": 1, "d": 1, "q": 1},
-            horizon=1
-        )
-        
-        assert "metrics" in result
-        assert "forecast" in result
-        assert result["feature_importance"] is None  # ARIMA has no features
-    
+        result = evaluate(large_daily_df, "ARIMA", {"p": 1, "d": 1, "q": 1})
+        assert len(result["forecast"]) > 0
+        assert "feature_importance" not in result  # ARIMA has no features
+
     def test_different_orders(self, large_daily_df):
-        """Different ARIMA orders should work."""
-        orders = [(1, 0, 0), (0, 1, 1), (2, 1, 2)]
-        
-        for p, d, q in orders:
-            result = train_arima(
-                df=large_daily_df,
-                date_col="date",
-                target_col="value",
-                training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-                prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-                params={"p": p, "d": d, "q": q},
-                horizon=1
-            )
-            
+        for p, d, q in [(1, 0, 0), (0, 1, 1), (2, 1, 2)]:
+            result = evaluate(large_daily_df, "ARIMA", {"p": p, "d": d, "q": q})
             assert len(result["forecast"]) > 0
-    
+
     def test_multi_horizon(self, large_daily_df):
-        """Multi-horizon should track horizon steps."""
-        result = train_arima(
-            df=large_daily_df,
-            date_col="date",
-            target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={"p": 1, "d": 1, "q": 1},
-            horizon=7
-        )
-        
-        assert len(result["metrics_by_horizon"]) > 0
-        
-        # Should have predictions for each horizon step
-        horizon_steps = set(f["horizon_step"] for f in result["forecast"])
-        assert len(horizon_steps) == 7
-    
+        result = evaluate(large_daily_df, "ARIMA", {"p": 1, "d": 1, "q": 1}, horizon=7)
+        assert {f["horizon_step"] for f in result["forecast"]} == set(range(1, 8))
+        assert len(result["metrics_by_horizon"]) == 7
+
     def test_insufficient_data_raises(self, large_daily_df):
-        """Should raise error with insufficient training data."""
-        small_df = large_daily_df.head(5)
-        
         with pytest.raises(ValueError, match="Not enough"):
-            train_arima(
-                df=small_df,
-                date_col="date",
-                target_col="value",
-                training_ranges=[DateRange("2023-01-01", "2023-01-05")],
-                prediction_ranges=[DateRange("2023-01-05", "2023-01-06")],
-                params={"p": 5, "d": 1, "q": 5},
-                horizon=1
-            )
+            evaluate(large_daily_df, "ARIMA", {"p": 5, "d": 1, "q": 5}, training=[DateRange("2023-01-01", "2023-01-05")])
 
-
-class TestModelMetricsFormat:
-    """Tests to ensure all models return consistent metric formats."""
-    
-    def test_all_metrics_present(self, large_daily_df):
-        """All models should return same metric keys."""
-        required_metrics = {"rmse", "mae", "mape", "r2", "msle", "execution_time"}
-        
-        # LAG
-        lag_result = train_lag(
-            df=large_daily_df,
-            date_col="date", target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={"lag": 1}
-        )
-        assert required_metrics.issubset(set(lag_result["metrics"].keys()))
-        
-        # Linear Regression
-        lr_result = train_linear_regression(
-            df=large_daily_df,
-            date_col="date", target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={"lags": [1]}
-        )
-        assert required_metrics.issubset(set(lr_result["metrics"].keys()))
-        
-        # ARIMA
-        arima_result = train_arima(
-            df=large_daily_df,
-            date_col="date", target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={"p": 1, "d": 1, "q": 1},
-            horizon=1
-        )
-        assert required_metrics.issubset(set(arima_result["metrics"].keys()))
-    
-    def test_forecast_format(self, large_daily_df):
-        """Forecasts should have consistent format."""
-        result = train_linear_regression(
-            df=large_daily_df,
-            date_col="date", target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={"lags": [1]}
-        )
-        
-        for forecast in result["forecast"]:
-            assert "date" in forecast
-            assert "prediction" in forecast
-            assert "value" in forecast
-            assert isinstance(forecast["prediction"], float)
-
-
-class TestArimaGap:
-    """ARIMA must use actual observations between training end and prediction start."""
+    def test_one_step_fast_path_matches_block_updates(self, large_daily_df):
+        """Horizon 1 uses one filtering pass: same results as updating the state block by block."""
+        ctx = ForecastContext(date_col="date", target_col="value", horizon=1)
+        model = ArimaForecaster(ArimaParams(p=2, d=1, q=1), ctx)
+        model.fit(large_daily_df, training_rows(large_daily_df, "date", TRAINING))
+        y = large_daily_df["value"].to_numpy()
+        blocks = [Block(i, i + 1) for i in range(120, 150)] + [Block(i, i + 1) for i in range(170, 180)]
+        fast = np.concatenate(model._one_step_ahead(y, blocks))
+        slow = np.concatenate(model._multi_step(y, blocks))
+        assert np.allclose(fast, slow)
 
     def test_gap_between_train_and_prediction(self):
+        """ARIMA must use actual observations between training end and prediction start."""
         dates = [datetime(2023, 1, 1) + timedelta(days=i) for i in range(300)]
         df = pl.DataFrame({"date": dates, "value": [float(i) for i in range(300)]})
 
-        result = train_arima(
-            df=df, date_col="date", target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-06-01")],
-            prediction_ranges=[DateRange("2023-09-01", "2023-09-10")],
-            params={"p": 1, "d": 1, "q": 0}, horizon=5
-        )
+        result = evaluate(df, "ARIMA", {"p": 1, "d": 1, "q": 0}, horizon=5,
+                          training=[DateRange("2023-01-01", "2023-06-01")],
+                          prediction=[DateRange("2023-09-01", "2023-09-10")])
 
         first = result["forecast"][0]
         # Linear series: the first prediction must be close to the actual value (243),
@@ -333,49 +220,48 @@ class TestArimaGap:
         assert abs(first["prediction"] - first["value"]) < 5
 
 
-class TestRecursiveForecastSkippedStep:
-    """A skipped step must not make later steps fall back to actual values."""
-
-    def test_skipped_step_propagates(self):
-        class Identity:
-            def predict(self, X):
-                return X[:, 0]
-
-        n = 10
-        df = pl.DataFrame({
-            "date": [datetime(2023, 1, 1) + timedelta(days=i) for i in range(n)],
-            "value": [float(i) for i in range(n)],
-            "target_lag_1": [None] + [float(i) for i in range(n - 1)],
-            "other": [1.0] * 5 + [None] + [1.0] * 4,  # missing at index 5 -> step 2 skipped
-        })
-        forecasts = block_recursive_forecast(
-            model=Identity(), df=df, date_col="date", target_col="value",
-            feature_names=["target_lag_1", "other"], feature_config=FeatureConfig(target_lags=[1]),
-            horizon=3, pred_start_idx=4, pred_end_idx=6
-        )
-        # Step 1 (idx 4) predicted, step 2 (idx 5) skipped, step 3 (idx 6) needs step 2 -> skipped
-        assert [f["step_in_block"] for f in forecasts] == [1]
-
-
 @pytest.mark.skipif(not PROPHET_AVAILABLE, reason="Prophet not installed")
-class TestProphetHorizon:
+class TestProphet:
     """Prophet reports metrics by horizon like the other models."""
 
     def test_horizon_steps(self, large_daily_df):
-        result = train_prophet(
-            df=large_daily_df, date_col="date", target_col="value",
-            training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-            prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-            params={}, horizon=7
-        )
+        result = evaluate(large_daily_df, "PROPHET", {}, horizon=7)
         assert [f["horizon_step"] for f in result["forecast"][:8]] == [1, 2, 3, 4, 5, 6, 7, 1]
         assert len(result["metrics_by_horizon"]) == 7
 
     def test_short_lag_regressor_rejected(self, large_daily_df):
         with pytest.raises(ValueError, match="< horizon 7"):
-            train_prophet(
-                df=large_daily_df, date_col="date", target_col="value",
-                training_ranges=[DateRange("2023-01-01", "2023-05-01")],
-                prediction_ranges=[DateRange("2023-05-01", "2023-06-01")],
-                params={"use_lag_regressors": True, "lag_regressors": [1, 7]}, horizon=7
-            )
+            evaluate(large_daily_df, "PROPHET", {"use_lag_regressors": True, "lag_regressors": [1, 7]}, horizon=7)
+
+
+class TestRegistry:
+    def test_unknown_type(self):
+        with pytest.raises(ValueError, match="Unknown model type"):
+            create_forecaster("NBEATS", {}, ForecastContext("date", "value", 1))
+
+    def test_invalid_params_are_readable(self):
+        with pytest.raises(ValueError, match="n_estimators"):
+            create_forecaster("XGBOOST", {"n_estimators": 100000}, ForecastContext("date", "value", 1))
+
+    def test_unknown_params_ignored(self):
+        """The UI sends extra keys (e.g. lags for Prophet): they must not fail."""
+        create_forecaster("ARIMA", {"p": 1, "lags": [1, 7]}, ForecastContext("date", "value", 1))
+
+
+class TestTrainingService:
+    def test_metrics_format(self, large_daily_df):
+        """All models return the same metric keys and forecast format."""
+        models = [type("M", (), {"id": t, "name": t, "type": t, "params": p})
+                  for t, p in [("LAG", {"lag": 1}), ("LINEAR_REGRESSION", {"lags": [1]}), ("ARIMA", {})]]
+        results = train_models(large_daily_df, ForecastContext("date", "value", 1), TRAINING, PREDICTION,
+                               models)
+        for result in results:
+            assert set(result["metrics"]) == {"rmse", "mae", "mape", "r2", "msle", "execution_time"}
+            for f in result["forecast"]:
+                assert set(f) == {"date", "prediction", "value", "horizon_step"}
+                assert isinstance(f["prediction"], float)
+
+    def test_empty_prediction_range_is_a_request_error(self, large_daily_df):
+        with pytest.raises(ValueError, match="prediction ranges"):
+            train_models(large_daily_df, ForecastContext("date", "value", 1), TRAINING,
+                         [DateRange("2030-01-01", "2030-02-01")], [])

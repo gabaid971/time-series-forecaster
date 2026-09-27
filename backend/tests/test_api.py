@@ -4,8 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 from datetime import datetime, timedelta
 import numpy as np
-import main
-from main import app
+from app.config import settings
+from app.main import app
 
 
 @pytest.fixture
@@ -247,7 +247,7 @@ class TestLimits:
     """The API is public: oversized requests must be rejected."""
 
     def test_too_many_rows(self, client, sample_data, monkeypatch):
-        monkeypatch.setattr(main, "MAX_ROWS", 50)
+        monkeypatch.setattr(settings, "max_rows", 50)
         response = client.post("/analyze", json={
             "data": sample_data, "date_column": "date", "target_column": "value"
         })
@@ -255,13 +255,13 @@ class TestLimits:
         assert "too large" in response.json()["detail"]
 
     def test_too_many_models(self, client, sample_data, monkeypatch):
-        monkeypatch.setattr(main, "MAX_MODELS", 1)
+        monkeypatch.setattr(settings, "max_models", 1)
         lag = {"id": "l", "type": "LAG", "name": "L", "params": {"lag": 1}}
         response = client.post("/train", json=_train_payload(sample_data, [lag, lag]))
         assert response.status_code == 413
 
     def test_body_too_large(self, client, monkeypatch):
-        monkeypatch.setattr(main, "MAX_BODY_MB", 0.001)
+        monkeypatch.setattr(settings, "max_body_mb", 0.001)
         response = client.post("/analyze", json={
             "data": [{"date": "2023-01-01", "value": i} for i in range(100)],
             "date_column": "date", "target_column": "value"
@@ -283,3 +283,19 @@ class TestCors:
             "Origin": "https://evil.example.com", "Access-Control-Request-Method": "POST"
         })
         assert "access-control-allow-origin" not in response.headers
+
+
+class TestRequestErrors:
+    """Unusable requests are HTTP errors, not 200 with an error status."""
+
+    def test_analyze_unknown_column(self, client, sample_data):
+        response = client.post("/analyze", json={"data": sample_data, "date_column": "date", "target_column": "nope"})
+        assert response.status_code == 422
+        assert "nope" in response.json()["detail"]
+
+    def test_train_empty_prediction_range(self, client, sample_data):
+        payload = _train_payload(sample_data, [{"id": "l", "type": "LAG", "name": "L", "params": {"lag": 1}}])
+        payload["data_config"]["prediction_ranges"] = [{"start": "2030-01-01", "end": "2030-02-01"}]
+        response = client.post("/train", json=payload)
+        assert response.status_code == 422
+        assert "prediction ranges" in response.json()["detail"]

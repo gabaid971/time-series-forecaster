@@ -36,4 +36,6 @@ addopts = "-v --tb=short"
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::FutureWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore:Using `httpx` with `starlette.testclient`",
 ]

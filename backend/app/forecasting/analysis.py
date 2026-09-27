@@ -1,11 +1,173 @@
 """
-Advanced time series analysis utilities.
-ACF, PACF computation and lag suggestions.
+Dataset analysis: statistics, ACF/PACF and lag suggestions, data quality alerts.
 """
 
+import logging
 import numpy as np
 from typing import List, Dict, Any, Tuple, Optional
 import polars as pl
+
+from app.forecasting.data import NUMERIC_DTYPES, detect_frequency
+
+logger = logging.getLogger(__name__)
+
+
+def to_native(obj: Any) -> Any:
+    """Recursively convert numpy types to Python native types (JSON serialization)."""
+    if isinstance(obj, np.ndarray):
+        return [to_native(x) for x in obj.tolist()]
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, dict):
+        return {k: to_native(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [to_native(x) for x in obj]
+    return obj
+
+
+def _isoformat(value: Any) -> str:
+    return value.isoformat() if hasattr(value, 'isoformat') else str(value)
+
+
+def analyze_dataset(df: pl.DataFrame, date_col: str, target_col: str) -> Dict[str, Any]:
+    """
+    Analyze a loaded dataset (see data.load_frame).
+
+    Returns stats, the cleaned target series, the other columns (candidate exogenous
+    variables), ACF/PACF lag suggestions and data quality alerts.
+    """
+    freq_code, freq_label, missing_dates = detect_frequency(df, date_col)
+    target_series = df[target_col]
+    missing_target = target_series.null_count()
+    valid_target = target_series.drop_nulls()
+    has_values = len(valid_target) > 0
+
+    stats = {
+        "date_min": _isoformat(df[date_col].min()),
+        "date_max": _isoformat(df[date_col].max()),
+        "total_rows": df.height,
+        "frequency": freq_code,
+        "frequency_label": freq_label,
+        "missing_dates": missing_dates,
+        "missing_values_target": missing_target,
+        "value_min": float(valid_target.min()) if has_values else 0.0,
+        "value_max": float(valid_target.max()) if has_values else 0.0,
+        "value_mean": float(valid_target.mean()) if has_values else 0.0,
+    }
+
+    clean_df = df.filter(pl.col(target_col).is_not_null())
+    normalized_data = [
+        {"date": _isoformat(d), "value": float(v)}
+        for d, v in zip(clean_df[date_col].to_list(), clean_df[target_col].to_list())
+    ]
+
+    available_columns = []
+    for col_name in df.columns:
+        if col_name in (date_col, target_col):
+            continue
+        col_series = df[col_name]
+        dtype = col_series.dtype
+        if dtype in NUMERIC_DTYPES:
+            dtype_str = "numeric"
+        elif dtype == pl.Boolean:
+            dtype_str = "boolean"
+        elif dtype in (pl.Datetime, pl.Date):
+            dtype_str = "date"
+        else:
+            dtype_str = "string"
+        available_columns.append({
+            "name": col_name,
+            "dtype": dtype_str,
+            "missing_count": col_series.null_count(),
+            "sample_values": col_series.drop_nulls().head(5).to_list(),
+        })
+
+    alerts: List[Dict[str, Any]] = []
+    lag_analysis = None
+    target_values = valid_target.to_numpy()
+
+    if len(target_values) >= 20:
+        # Each analysis is best-effort: a failure must not prevent the others
+        try:
+            lag_analysis = to_native(suggest_lags(target_values, frequency=freq_code, max_lags=20))
+            seasonality = lag_analysis["seasonality"]
+            if seasonality.get("detected"):
+                alerts.append({
+                    "type": "info",
+                    "category": "seasonality",
+                    "message": f"Seasonality detected: {seasonality.get('period_label', '')} pattern "
+                               f"(strength: {seasonality.get('strength', 0):.2f})",
+                    "details": seasonality,
+                })
+        except Exception:
+            logger.exception("Lag analysis failed")
+
+        try:
+            outliers = to_native(detect_outliers(target_values, method="iqr"))
+            if outliers["count"] > 0:
+                pct = outliers["percentage"]
+                alerts.append({
+                    "type": "warning" if pct > 5 else "info",
+                    "category": "outliers",
+                    "message": f"{outliers['count']} outliers detected ({pct:.1f}% of data)",
+                    "details": outliers,
+                })
+        except Exception:
+            logger.exception("Outlier detection failed")
+
+        try:
+            trend = to_native(detect_trend(target_values))
+            if trend["detected"]:
+                alerts.append({
+                    "type": "info",
+                    "category": "trend",
+                    "message": f"{trend['strength'].capitalize()} {trend['direction']} trend detected",
+                    "details": trend,
+                })
+        except Exception:
+            logger.exception("Trend detection failed")
+
+        try:
+            stationarity = to_native(compute_stationarity_indicators(target_values))
+            if stationarity.get("likely_stationary") is False:
+                alerts.append({
+                    "type": "warning",
+                    "category": "stationarity",
+                    "message": "Series may be non-stationary. Consider differencing for ARIMA.",
+                    "details": stationarity,
+                })
+        except Exception:
+            logger.exception("Stationarity check failed")
+
+    if missing_dates > 0:
+        pct = (missing_dates / df.height) * 100
+        alerts.append({
+            "type": "warning" if pct > 10 else "info",
+            "category": "missing",
+            "message": f"{missing_dates} missing dates detected ({pct:.1f}%)",
+            "details": {"missing_count": missing_dates, "percentage": pct},
+        })
+
+    if missing_target > 0:
+        pct = (missing_target / df.height) * 100
+        alerts.append({
+            "type": "warning" if pct > 5 else "info",
+            "category": "missing",
+            "message": f"{missing_target} missing target values ({pct:.1f}%)",
+            "details": {"missing_count": missing_target, "percentage": pct},
+        })
+
+    return {
+        "stats": stats,
+        "normalized_data": normalized_data,
+        "available_columns": available_columns,
+        "lag_analysis": lag_analysis,
+        "alerts": alerts or None,
+    }
 
 
 def compute_acf(series: np.ndarray, max_lag: int = 40) -> List[float]:

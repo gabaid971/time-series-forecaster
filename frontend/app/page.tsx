@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { ModelConfig, ModelType, TimeSeriesData, ModelResult, DateRange, ShapValue, ColumnInfo } from '../types/forecasting';
+import { ModelConfig, ModelType, TimeSeriesData, ModelResult, DateRange, ShapValue, ColumnInfo, FeatureConfig } from '../types/forecasting';
 import { Upload, Activity, BarChart3, Settings, ChevronDown, FileText, CheckCircle2, Trophy, Timer, Download, TrendingUp, TrendingDown, Info } from 'lucide-react';
 import Papa from 'papaparse';
 
@@ -198,9 +198,14 @@ export default function ForecastingPage() {
     setTrainError(null);
 
     try {
-      // Use rawData for training (contains all columns including exogenous)
+      // Send only the columns the models use (date, target, selected exogenous variables)
+      const usedColumns = new Set([data.dateColumn, data.targetColumn]);
+      selectedModels.forEach(m => {
+        const exogenous = (m.params as { feature_config?: FeatureConfig }).feature_config?.exogenous || [];
+        exogenous.forEach(e => usedColumns.add(e.column));
+      });
       const payload = {
-        data: rawData,
+        data: rawData.map(row => Object.fromEntries(Array.from(usedColumns, col => [col, row[col]]))),
         data_config: {
           target_column: data.targetColumn,
           date_column: data.dateColumn,
