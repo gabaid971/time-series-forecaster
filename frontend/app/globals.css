@@ -2,62 +2,121 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --foreground-rgb: 226, 232, 240;
-  --background-start-rgb: 10, 10, 12; /* Very dark, almost black */
-  --background-end-rgb: 23, 23, 28;   /* Slightly lighter dark */
-  --accent-glow: 245, 158, 11;        /* Amber-500 for the "light" */
+/*
+ * Design tokens. Components use semantic colors (fg, panel, accent...) defined in
+ * tailwind.config.ts from these variables, so each theme only redefines values here.
+ * Values are "R G B" triplets to support Tailwind opacity modifiers (bg-ink/5).
+ */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: 12 12 14;          /* Page background */
+  --canvas-end: 23 23 28;
+  --panel: 24 24 27;           /* Cards */
+  --ink: 255 255 255;          /* Base of translucent overlays, borders, hovers */
+  --shade: 0 0 0;              /* Base of recessed areas (inputs, chart wells) */
+  --fg: 244 244 245;           /* Primary text */
+  --fg-muted: 161 161 170;     /* Secondary text */
+  --fg-subtle: 113 113 122;    /* Tertiary text, disabled */
+  --accent: 245 158 11;        /* Brand amber: fills, focus, selection */
+  --accent-text: 251 191 36;   /* Amber for text on the panel */
+  --on-accent: 0 0 0;          /* Text on an accent fill */
+  --positive: 52 211 153;
+  --negative: 248 113 113;
+  --warning: 251 146 60;
+  --info: 96 165 250;
+  --glow: 245 158 11;
+  --glass: 255 255 255 / 0.05; /* Main frame: a light veil over the dark canvas */
+
+  /* Model series (validated categorical palette, dark steps) */
+  --series-1: 57 135 229;
+  --series-2: 217 89 38;
+  --series-3: 25 158 112;
+  --series-4: 201 133 0;
+  --series-5: 213 81 129;
+  --series-6: 0 131 0;
+  --series-7: 144 133 233;
+  --series-8: 230 103 103;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --canvas: 244 244 245;
+  --canvas-end: 250 250 250;
+  --panel: 255 255 255;
+  --ink: 24 24 27;
+  --shade: 212 212 216;
+  --fg: 24 24 27;
+  --fg-muted: 82 82 91;
+  --fg-subtle: 113 113 122;
+  --accent: 245 158 11;
+  --accent-text: 180 83 9;
+  --on-accent: 0 0 0;
+  --positive: 5 150 105;
+  --negative: 220 38 38;
+  --warning: 234 88 12;
+  --info: 37 99 235;
+  --glow: 217 119 6;
+  --glass: 255 255 255 / 0.6;  /* Main frame: almost white, no gray veil */
+
+  /* Model series (validated categorical palette, light steps) */
+  --series-1: 42 120 214;
+  --series-2: 235 104 52;
+  --series-3: 27 175 122;
+  --series-4: 237 161 0;
+  --series-5: 232 123 164;
+  --series-6: 0 131 0;
+  --series-7: 74 58 167;
+  --series-8: 227 73 72;
 }
 
 body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom right,
-      rgb(var(--background-start-rgb)),
-      rgb(var(--background-end-rgb))
-    );
+  overflow-x: clip;  /* Decorative glows and popovers never cause horizontal scrolling */
+  color: rgb(var(--fg));
+  background: linear-gradient(to bottom right, rgb(var(--canvas)), rgb(var(--canvas-end)));
   min-height: 100vh;
 }
 
 @layer utilities {
   .glass-panel {
-    @apply bg-white/5 backdrop-blur-md border border-white/10 shadow-xl;
+    @apply backdrop-blur-md border border-ink/10 shadow-xl;
+    background-color: rgb(var(--glass));
   }
-  
+
   .glass-input {
-    @apply bg-black/20 border border-white/10 text-white placeholder-gray-500 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 transition-all;
+    @apply bg-ink/5 border border-ink/10 text-fg placeholder-fg-subtle focus:border-accent/50 focus:ring-1 focus:ring-accent/50 transition-all;
   }
 
   .glow-text {
-    text-shadow: 0 0 20px rgba(245, 158, 11, 0.5);
+    text-shadow: 0 0 20px rgb(var(--glow) / 0.5);
   }
 
   .glow-box {
-    box-shadow: 0 0 40px -10px rgba(245, 158, 11, 0.15);
+    box-shadow: 0 0 40px -10px rgb(var(--glow) / 0.15);
   }
-  
-  /* Animation for the "fog" effect */
+
+  /* Soft light from the top of the page */
   .fog-gradient {
-    background: radial-gradient(circle at 50% 0%, rgba(255,255,255,0.03) 0%, transparent 70%);
+    background: radial-gradient(circle at 50% 0%, rgb(var(--ink) / 0.03) 0%, transparent 70%);
   }
-  
-  /* Custom scrollbar for timeline */
+
+  /* Custom scrollbar */
   .custom-scrollbar::-webkit-scrollbar {
     height: 6px;
     width: 6px;
   }
-  
+
   .custom-scrollbar::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.05);
+    background: rgb(var(--ink) / 0.05);
     border-radius: 3px;
   }
-  
+
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(245, 158, 11, 0.3);
+    background: rgb(var(--accent) / 0.3);
     border-radius: 3px;
   }
-  
+
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgba(245, 158, 11, 0.5);
+    background: rgb(var(--accent) / 0.5);
   }
 }

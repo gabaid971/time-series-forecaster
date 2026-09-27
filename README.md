@@ -22,6 +22,10 @@ Backend layout (`backend/app/`):
 | `forecasting/backtest.py` | Evaluation engine common to all models (blocks of `horizon` steps) |
 | `forecasting/training.py` | Trains and evaluates the requested models |
 | `forecasting/analysis.py` | Dataset analysis (ACF/PACF, seasonality, alerts) |
+| `forecasting/future.py` | Retrain on the whole history and forecast future dates |
+
+API endpoints: `POST /analyze` (dataset analysis), `POST /train` (evaluate models on a
+validation period), `POST /forecast` (forecast the dates after the data), `GET /health`.
 
 ## Features
 
@@ -38,7 +42,13 @@ Backend layout (`backend/app/`):
   forecast recursively within each block, with metrics by horizon step
 - Exogenous variables are either *known ahead* (calendar, planned promotions) or not:
   in the latter case only lags >= horizon are allowed, to avoid leaking future values
-- Compare model performance with interactive charts, export forecasts to CSV
+- Compare models with interactive charts: gain vs a naive forecast, error by horizon step,
+  error distribution, feature importance and SHAP calendar effects; export to CSV
+- Forecast space: save validated models ("recipes") to a library kept in the browser
+  (JSON export/import), retrain them on the whole history and forecast future dates,
+  with confidence intervals derived from the validation errors at each horizon step
+- Simple mode (smart defaults from the data analysis) and advanced mode (all settings),
+  dark and light themes
 
 ## Installation & Setup
 
@@ -84,6 +94,15 @@ npm run dev
 ```
 
 The app will be available at `http://localhost:3000`
+
+Visual walkthrough (captures every page in both themes, desktop and mobile, into
+`frontend/screenshots/`, and checks there is no console error or horizontal overflow),
+with the frontend and backend running:
+
+```bash
+npx playwright install --with-deps chromium   # once
+npm run screenshots
+```
 
 ## Usage
 

@@ -25,7 +25,8 @@ export interface ModelConfig {
   id: string; // unique id (ex: "xgb-run-1")
   type: ModelType;
   name: string; // Nom affiché (ex: "XGBoost avec Lags")
-  
+  colorIndex?: number; // Fixed palette slot (see lib/modelColors.ts)
+
   // Config spécifique (Union type)
   params: LagParams | ArimaParams | ProphetParams | XGBoostParams | LinearRegressionParams;
 }
@@ -210,4 +211,85 @@ export interface ModelResult {
 export interface TrainingResponse {
   status: 'success' | 'error';
   results: ModelResult[];
+}
+
+// 6. Dataset analysis (Backend -> Frontend, /analyze)
+export interface DatasetStats {
+  date_min: string;
+  date_max: string;
+  total_rows: number;
+  frequency: string;
+  frequency_label: string;
+  missing_dates: number;
+  missing_values_target: number;
+  value_min: number;
+  value_max: number;
+  value_mean: number;
+}
+
+export interface Seasonality {
+  period: number;               // In rows (e.g. 365 for a yearly cycle of daily data)
+  period_label: string;         // "Yearly", "Weekly"...
+  strength: number;             // Autocorrelation at the period
+  suggested_feature?: string | null;  // Calendar feature capturing the cycle
+}
+
+export interface LagAnalysis {
+  suggested_lags: number[];
+  suggested_temporal: string[];  // Calendar features recommended by the detected cycles
+  seasonalities: Seasonality[];
+  acf: number[];
+  pacf: number[];
+  confidence_interval: number;
+  significant_lags: { lag: number; pacf: number; significant: boolean }[];
+  seasonality: {
+    detected: boolean;
+    period?: number;
+    period_label?: string;
+    strength?: number;
+  };
+  n_observations: number;
+}
+
+export interface DataAlert {
+  type: 'warning' | 'info' | 'error';
+  category: string;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+// 7. Forecast space: library of validated recipes and forecasts of future dates
+export interface Recipe {
+  id: string;
+  name: string;
+  createdAt: string;
+  colorIndex: number;            // Fixed palette slot of the recipe in the Forecast space
+  model: ModelConfig;            // Type and parameters to retrain
+  dataset: { filename: string; dateColumn: string; targetColumn: string; frequency: string };
+  validation: {
+    horizon: number;
+    trainingRanges: DateRange[];
+    predictionRanges: DateRange[];
+    points: number;
+    rmse: number;
+    mae: number;
+    r2: number;
+    gain: number;                // vs naive forecast (0.2 = 20% less error)
+  };
+  // Quantiles of |forecast - actual| on the validation period, per step ahead (conformal intervals)
+  intervals: { step: number; q80: number; q95: number }[];
+  source: { modelId: string; rmse: number };  // To know if a result is already saved
+}
+
+export interface FuturePoint {
+  date: string;
+  prediction: number | null;
+  step: number;
+}
+
+export interface ForecastOutput {
+  frequency: string;
+  lastDate: string;
+  steps: number;
+  results: { recipeId: string; name: string; forecast: FuturePoint[]; warning?: string; error?: string }[];
 }

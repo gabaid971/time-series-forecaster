@@ -80,3 +80,29 @@ export function getMapeColorClass(mape: number): string {
   if (mape <= 0.25) return 'text-amber-400';
   return 'text-red-400';
 }
+
+const INTRADAY = new Set(['s', 'min', 'H']);
+
+/** Date of the series for display: date only, or date + time for intraday data. */
+export function formatDate(iso: string, frequency?: string): string {
+  if (!iso) return '';
+  const [date, time = ''] = iso.split('T');
+  return frequency && INTRADAY.has(frequency) ? `${date} ${time.slice(0, 5)}` : date;
+}
+
+/** Human duration between two ISO dates ("10.0 years", "3.0 days", "5 hours"). */
+export function formatDuration(startIso: string, endIso: string): string {
+  const ms = new Date(endIso).getTime() - new Date(startIso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const hours = ms / 3_600_000;
+  const days = hours / 24;
+  if (days >= 365) return `${(days / 365.25).toFixed(1)} years`;
+  if (days >= 60) return `${(days / 30.44).toFixed(1)} months`;
+  if (days >= 2) return `${days.toFixed(1)} days`;
+  return `${hours.toFixed(0)} hours`;
+}
+
+/** Number with thousands separators and at most `decimals` decimals. */
+export function formatNumber(value: number, decimals = 2): string {
+  return value.toLocaleString('en-US', { maximumFractionDigits: decimals });
+}

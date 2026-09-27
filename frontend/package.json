@@ -6,10 +6,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "screenshots": "playwright test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "clsx": "^2.1.1",
+    "idb-keyval": "^6.3.0",
     "lucide-react": "^0.378.0",
     "next": "14.2.3",
     "papaparse": "^5.5.3",
@@ -17,9 +20,11 @@
     "react": "^18",
     "react-dom": "^18",
     "react-plotly.js": "^2.6.0",
-    "tailwind-merge": "^2.3.0"
+    "tailwind-merge": "^2.3.0",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "^20",
     "@types/papaparse": "^5.5.1",
     "@types/react": "^18.3.27",

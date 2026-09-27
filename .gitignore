@@ -40,3 +40,8 @@ backend/.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Playwright
+frontend/screenshots/
+frontend/test-results/
+frontend/playwright-report/
