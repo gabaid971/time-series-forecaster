@@ -322,3 +322,20 @@ class TestRequestErrors:
         response = client.post("/train", json=payload)
         assert response.status_code == 422
         assert "prediction ranges" in response.json()["detail"]
+
+
+class TestCorsRegex:
+    """ALLOWED_ORIGIN_REGEX accepts a family of origins (e.g. Vercel previews)."""
+
+    def test_regex_origin(self, monkeypatch):
+        import importlib
+        from app import config, main as main_module
+        monkeypatch.setenv("ALLOWED_ORIGIN_REGEX", r"https://tsf-.*\.vercel\.app")
+        monkeypatch.setattr(config, "settings", config.Settings())
+        client = TestClient(importlib.reload(main_module).app)
+        allowed = client.options("/train", headers={"Origin": "https://tsf-git-refonte.vercel.app", "Access-Control-Request-Method": "POST"})
+        refused = client.options("/train", headers={"Origin": "https://evil.vercel.app", "Access-Control-Request-Method": "POST"})
+        assert allowed.headers.get("access-control-allow-origin") == "https://tsf-git-refonte.vercel.app"
+        assert "access-control-allow-origin" not in refused.headers
+        monkeypatch.delenv("ALLOWED_ORIGIN_REGEX")
+        importlib.reload(main_module)

@@ -1,17 +1,19 @@
-# Render.com configuration
-# https://render.com/docs/blueprint-spec
+# Render.com configuration (Blueprint spec: https://render.com/docs/blueprint-spec)
+# Documents the service settings; see DEPLOYMENT.md for the step-by-step checklist.
 
 services:
   - type: web
     name: time-series-forecaster-api
-    env: docker
+    runtime: docker
+    rootDir: backend
     dockerfilePath: ./Dockerfile
-    region: frankfurt  # ou oregon, singapore, ohio
+    region: frankfurt
     plan: free
     healthCheckPath: /health
     envVars:
-      - key: PYTHON_ENV
-        value: production
-      # Frontend origin(s) allowed by CORS, comma-separated (e.g. https://my-app.vercel.app)
+      # Frontend origin(s) allowed by CORS, comma-separated, e.g. https://my-app.vercel.app
       - key: ALLOWED_ORIGINS
+        sync: false
+      # Optional: pattern of extra origins, e.g. Vercel previews https://my-app-.*\.vercel\.app
+      - key: ALLOWED_ORIGIN_REGEX
         sync: false

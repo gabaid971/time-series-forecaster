@@ -18,6 +18,6 @@ export default defineConfig({
   projects: [
     { name: 'desktop', use: { viewport: { width: 1440, height: 900 } } },
     // Layout checks on mobile; behavior tests (forecast.spec) once is enough
-    { name: 'mobile', use: { ...devices['iPhone 13'], browserName: 'chromium' }, testIgnore: /forecast\.spec/ },
+    { name: 'mobile', use: { ...devices['iPhone 13'], browserName: 'chromium' }, testIgnore: /(forecast|server)\.spec/ },
   ],
 });

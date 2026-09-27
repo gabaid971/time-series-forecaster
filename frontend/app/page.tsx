@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 
 import AppHeader from '../components/layout/AppHeader';
 import Stepper from '../components/layout/Stepper';
+import { ServerStatusBanner } from '../components/layout/ServerStatusBanner';
 import DataStep from '../components/experiment/DataStep';
 import ResultsStep from '../components/experiment/ResultsStep';
 import ModelsStep from '../components/experiment/ModelsStep';
@@ -29,6 +30,7 @@ export default function ForecastingPage() {
 
       <div className="relative z-10 max-w-6xl mx-auto p-3 sm:p-6">
         <AppHeader />
+        <ServerStatusBanner />
         {space === 'experiment' && <Stepper />}
 
         {/* Main Content Area */}

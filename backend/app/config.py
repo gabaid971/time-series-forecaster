@@ -14,6 +14,9 @@ class Settings:
     # The API is public (demo app): protection is about limiting abuse, not access.
     # Frontend origins allowed by browsers (CORS), comma-separated.
     allowed_origins: list[str] = field(default_factory=_origins)
+    # Optional pattern of extra allowed origins, e.g. Vercel preview deployments:
+    # https://time-series-forecaster-.*\.vercel\.app
+    allowed_origin_regex: str | None = field(default_factory=lambda: os.environ.get("ALLOWED_ORIGIN_REGEX") or None)
 
     # Request size limits
     max_body_mb: float = float(os.environ.get("MAX_BODY_MB", "20"))

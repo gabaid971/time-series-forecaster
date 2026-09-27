@@ -50,6 +50,8 @@ validation period), `POST /forecast` (forecast the dates after the data), `GET /
 - Simple mode (smart defaults from the data analysis) and advanced mode (all settings),
   dark and light themes
 
+Deployment (Render + Vercel): see [DEPLOYMENT.md](DEPLOYMENT.md).
+
 ## Installation & Setup
 
 Requirements: [uv](https://docs.astral.sh/uv/) (installs Python 3.12 if needed) and Node.js 18+.
@@ -74,6 +76,7 @@ Environment variables (all optional):
 | Variable | Default | Description |
 |---|---|---|
 | `ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Frontend origins allowed by CORS, comma-separated |
+| `ALLOWED_ORIGIN_REGEX` | none | Optional pattern of extra allowed origins (e.g. Vercel previews) |
 | `MAX_BODY_MB` | `20` | Maximum request size |
 | `MAX_ROWS` | `100000` | Maximum dataset rows |
 | `MAX_MODELS` | `10` | Maximum models per training request |
