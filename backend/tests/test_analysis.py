@@ -3,6 +3,7 @@
 import pytest
 import numpy as np
 from app.forecasting.analysis import (
+    detect_seasonalities,
     compute_acf,
     compute_pacf,
     suggest_lags,
@@ -130,6 +131,36 @@ class TestSuggestLagsMinuteData:
         assert len(result["acf"]) >= 61
         assert result["seasonality"]["detected"] is True
         assert result["seasonality"]["period_label"] == "Hourly"
+
+
+class TestDetectSeasonalities:
+    """Seasonal cycles are searched among the plausible ones for the frequency."""
+
+    def test_yearly_cycle_on_daily_data(self):
+        np.random.seed(0)
+        i = np.arange(365 * 6)
+        series = 10 + 5 * np.sin(2 * np.pi * i / 365.25) + np.random.randn(len(i))
+        result = detect_seasonalities(series, "D")
+        assert [s["period_label"] for s in result] == ["Yearly"]
+        assert result[0]["suggested_feature"] == "month"
+
+    def test_persistent_series_is_not_weekly(self):
+        """An AR(1) has a high ACF at lag 7 but no peak there: it is not a weekly cycle."""
+        np.random.seed(0)
+        series = np.zeros(1000)
+        for t in range(1, 1000):
+            series[t] = 0.9 * series[t - 1] + np.random.randn()
+        assert detect_seasonalities(series, "D") == []
+
+    def test_harmonic_is_not_a_new_cycle(self):
+        """A 60-minute cycle also peaks at 1440 (= 24 x 60): that is not a daily cycle."""
+        np.random.seed(0)
+        i = np.arange(3 * 1440)
+        series = 20 * np.sin(2 * np.pi * i / 60) + np.random.randn(len(i))
+        assert [s["period"] for s in detect_seasonalities(series, "min")] == [60]
+
+    def test_too_short_series(self):
+        assert detect_seasonalities(np.random.randn(100), "D") == []
 
 
 class TestDetectOutliers:

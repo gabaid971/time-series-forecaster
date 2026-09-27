@@ -138,6 +138,8 @@ def summarize_analyze(response_json):
         "acf": lag["acf"],
         "pacf": lag["pacf"],
         "seasonality": lag["seasonality"],
+        "seasonalities": lag["seasonalities"],
+        "suggested_temporal": lag["suggested_temporal"],
         "alerts": [a["message"] for a in response_json["alerts"] or []],
         "n_normalized": len(response_json["normalized_data"]),
     }

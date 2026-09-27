@@ -250,155 +250,136 @@ def compute_pacf(series: np.ndarray, max_lag: int = 40) -> List[float]:
     return pacf
 
 
+# Seasonal cycles worth testing for each frequency: (period in rows, label)
+SEASONAL_CANDIDATES: Dict[str, List[Tuple[int, str]]] = {
+    "s": [(60, "Minutely")],
+    "min": [(60, "Hourly"), (1440, "Daily")],
+    "H": [(24, "Daily"), (168, "Weekly")],
+    "D": [(7, "Weekly"), (365, "Yearly")],
+    "W": [(52, "Yearly")],
+    "M": [(12, "Yearly")],
+}
+
+# Calendar feature that captures a seasonal cycle (better than a very long lag)
+SEASONAL_FEATURES: Dict[Tuple[str, int], str] = {
+    ("min", 1440): "minute_of_day",
+    ("H", 24): "hour_of_day",
+    ("H", 168): "day_of_week",
+    ("D", 7): "day_of_week",
+    ("D", 365): "month",
+    ("W", 52): "week_of_year",
+    ("M", 12): "month",
+}
+
+MIN_SEASONAL_ACF = 0.2      # Autocorrelation at the period to call it a cycle
+MAX_SEASONAL_LAG = 60       # Longer cycles are suggested as calendar features, not lags
+MIN_PACF_FOR_LAG = 0.1      # With many points everything is "significant": keep useful lags only
+
+
+def _acf_fft(series: np.ndarray, max_lag: int) -> np.ndarray:
+    """ACF up to max_lag in O(n log n) (same estimator as compute_acf)."""
+    x = np.asarray(series, dtype=float) - np.mean(series)
+    n = len(x)
+    var = np.dot(x, x) / n
+    if var == 0:
+        return np.concatenate([[1.0], np.zeros(max_lag)])
+    size = 1 << (2 * n - 1).bit_length()
+    spectrum = np.fft.rfft(x, size)
+    acov = np.fft.irfft(spectrum * np.conj(spectrum), size)[: max_lag + 1] / n
+    return acov / var
+
+
+def detect_seasonalities(series: np.ndarray, frequency: str) -> List[Dict[str, Any]]:
+    """
+    Seasonal cycles among the plausible ones for the frequency (e.g. weekly and yearly
+    for daily data). A cycle is detected when the ACF has a clear peak at its period.
+    A multiple of a detected cycle (weekly = 7 x daily) only counts if it is stronger.
+    """
+    n = len(series)
+    candidates = [(p, label) for p, label in SEASONAL_CANDIDATES.get(frequency, []) if n >= 2 * p + 1]
+    if not candidates:
+        return []
+    max_period = max(p for p, _ in candidates)
+    acf = _acf_fft(series, min(n - 1, max_period + max_period // 10 + 1))
+
+    detected: List[Dict[str, Any]] = []
+    for period, label in sorted(candidates):
+        # Tolerance for calendar irregularities (365 vs 366 days)
+        window = max(1, period // 30)
+        around = acf[max(1, period - window): min(len(acf), period + window + 1)]
+        strength = float(np.max(around))
+        half = float(acf[period // 2])
+        is_peak = strength >= MIN_SEASONAL_ACF and strength > half + 0.1
+        if not is_peak:
+            continue
+        harmonic_of = [d for d in detected if period % d["period"] == 0]
+        if harmonic_of and strength <= max(d["strength"] for d in harmonic_of) + 0.1:
+            continue
+        detected.append({
+            "period": period,
+            "period_label": label,
+            "strength": round(strength, 4),
+            "suggested_feature": SEASONAL_FEATURES.get((frequency, period)),
+        })
+    return detected
+
+
 def suggest_lags(
-    series: np.ndarray, 
+    series: np.ndarray,
     frequency: str = "D",
     max_lags: int = 20
 ) -> Dict[str, Any]:
     """
-    Analyze time series and suggest optimal lags based on PACF.
-    
+    Analyze a time series: ACF/PACF, seasonal cycles, suggested lags and calendar features.
+
     Args:
         series: Time series values
         frequency: Detected frequency code (s, min, H, D, W, M), as returned by detect_frequency
         max_lags: Maximum number of lags to analyze
-        
+
     Returns:
         Dictionary with suggested lags and analysis
     """
     n = len(series)
-    seasonal_lag = _get_seasonal_lag(frequency)
+    seasonalities = detect_seasonalities(series, frequency)
+    short_periods = [s["period"] for s in seasonalities if s["period"] <= MAX_SEASONAL_LAG]
 
-    # Look far enough to see the expected seasonal lag (e.g. 60 for minute data)
-    max_lag_compute = max_lags * 2
-    if seasonal_lag:
-        max_lag_compute = max(max_lag_compute, seasonal_lag + 1)
-    max_lag_compute = min(max_lag_compute, n // 3)
-
-    # Compute ACF and PACF
+    # Look far enough to see short seasonal lags (e.g. 60 for minute data)
+    max_lag_compute = min(max([max_lags * 2] + [p + 1 for p in short_periods]), n // 3)
     acf_values = compute_acf(series, max_lag_compute)
     pacf_values = compute_pacf(series, max_lag_compute)
-    
+
     # Confidence interval (approximate 95%)
     confidence = 1.96 / np.sqrt(n)
-    
-    # Find significant lags from PACF
-    significant_lags = []
-    for lag in range(1, len(pacf_values)):
-        if abs(pacf_values[lag]) > confidence:
-            significant_lags.append({
-                "lag": lag,
-                "pacf": round(pacf_values[lag], 4),
-                "significant": True
-            })
-    
-    # Sort by absolute PACF value
-    significant_lags.sort(key=lambda x: abs(x["pacf"]), reverse=True)
-    
-    # Suggest top lags (max 5)
-    suggested = [x["lag"] for x in significant_lags[:5]]
-    
-    # Add seasonal lag based on frequency
-    if seasonal_lag and seasonal_lag not in suggested and seasonal_lag <= max_lag_compute:
-        suggested.append(seasonal_lag)
-    
-    # Always include lag 1 if significant or if no significant lags found
-    if 1 not in suggested:
-        suggested.insert(0, 1)
-    
-    suggested = sorted(set(suggested))[:7]  # Max 7 lags
-    
-    # Detect seasonality from ACF peaks
-    seasonality = _detect_seasonality(acf_values, frequency)
-    
-    # Return up to the seasonal lag so the seasonal peak is visible in the plots
-    n_returned = max(max_lags, seasonal_lag or 0) + 1
 
+    significant_lags = [
+        {"lag": lag, "pacf": round(pacf_values[lag], 4), "significant": True}
+        for lag in range(1, len(pacf_values))
+        if abs(pacf_values[lag]) > confidence
+    ]
+    significant_lags.sort(key=lambda x: abs(x["pacf"]), reverse=True)
+
+    # Strongest useful PACF lags, lag 1, and the short seasonal periods
+    suggested = [x["lag"] for x in significant_lags if abs(x["pacf"]) >= MIN_PACF_FOR_LAG][:5]
+    suggested = sorted(set(suggested + [1] + short_periods))[:7]
+
+    # ACF long enough to show the longest detected cycle, PACF up to short seasonal lags
+    n_acf = min(max([max_lags] + [s["period"] + s["period"] // 10 for s in seasonalities]) + 1, n // 3)
+    acf_display = _acf_fft(series, n_acf - 1) if n_acf > len(acf_values) else np.array(acf_values[:n_acf])
+    n_pacf = max([max_lags] + short_periods) + 1
+
+    main = max(seasonalities, key=lambda s: s["strength"]) if seasonalities else None
     return {
         "suggested_lags": suggested,
-        "acf": [round(v, 4) for v in acf_values[:n_returned]],
-        "pacf": [round(v, 4) for v in pacf_values[:n_returned]],
+        "suggested_temporal": sorted({s["suggested_feature"] for s in seasonalities if s["suggested_feature"]}),
+        "acf": [round(float(v), 4) for v in acf_display],
+        "pacf": [round(v, 4) for v in pacf_values[:n_pacf]],
         "confidence_interval": round(confidence, 4),
         "significant_lags": significant_lags[:10],  # Top 10
-        "seasonality": seasonality,
+        "seasonality": {"detected": True, **main} if main else {"detected": False},
+        "seasonalities": seasonalities,
         "n_observations": n
     }
-
-
-def _get_seasonal_lag(frequency: str) -> Optional[int]:
-    """Get expected seasonal lag based on frequency."""
-    seasonal_map = {
-        "min": 60,    # Minute -> hourly pattern
-        "H": 24,      # Hourly -> daily pattern
-        "D": 7,       # Daily -> weekly pattern
-        "W": 52,      # Weekly -> yearly pattern (too long usually)
-        "M": 12,      # Monthly -> yearly pattern
-    }
-    return seasonal_map.get(frequency)
-
-
-def _detect_seasonality(acf_values: List[float], frequency: str) -> Dict[str, Any]:
-    """Detect seasonality patterns from ACF."""
-    if len(acf_values) < 5:
-        return {"detected": False}
-    
-    # Find local maxima in ACF
-    peaks = []
-    for i in range(2, len(acf_values) - 1):
-        if acf_values[i] > acf_values[i-1] and acf_values[i] > acf_values[i+1]:
-            if acf_values[i] > 0.1:  # Minimum threshold
-                peaks.append({"lag": i, "acf": round(acf_values[i], 4)})
-    
-    if not peaks:
-        return {"detected": False}
-    
-    # Sort by ACF value
-    peaks.sort(key=lambda x: x["acf"], reverse=True)
-    
-    # Check for periodic pattern
-    main_peak = peaks[0] if peaks else None
-    
-    if main_peak and main_peak["acf"] > 0.3:
-        period = main_peak["lag"]
-        
-        # Map to human-readable
-        period_label = _period_to_label(period, frequency)
-        
-        return {
-            "detected": True,
-            "period": period,
-            "period_label": period_label,
-            "strength": main_peak["acf"],
-            "peaks": peaks[:5]
-        }
-    
-    return {"detected": False, "peaks": peaks[:5]}
-
-
-def _period_to_label(period: int, frequency: str) -> str:
-    """Convert period to human-readable label."""
-    if frequency == "D":
-        if period == 7:
-            return "Weekly"
-        elif period == 30 or period == 31:
-            return "Monthly"
-        elif period == 365 or period == 364:
-            return "Yearly"
-    elif frequency == "H":
-        if period == 24:
-            return "Daily"
-        elif period == 168:
-            return "Weekly"
-    elif frequency == "min":
-        if period == 60:
-            return "Hourly"
-        elif period == 1440:
-            return "Daily"
-    elif frequency == "M":
-        if period == 12:
-            return "Yearly"
-    
-    return f"{period}-period cycle"
 
 
 def detect_outliers(series: np.ndarray, method: str = "iqr") -> Dict[str, Any]:

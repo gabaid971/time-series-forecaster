@@ -109,13 +109,22 @@ class NormalizedDataPoint(BaseModel):
     value: float
 
 
+class Seasonality(BaseModel):
+    period: int
+    period_label: str
+    strength: float
+    suggested_feature: Optional[str] = None  # Calendar feature capturing the cycle
+
+
 class LagSuggestion(BaseModel):
     suggested_lags: List[int]
+    suggested_temporal: List[str] = []  # Calendar features recommended by the detected cycles
     acf: List[float]
     pacf: List[float]
     confidence_interval: float
     significant_lags: List[Dict[str, Any]]
-    seasonality: Dict[str, Any]
+    seasonality: Dict[str, Any]  # Strongest detected cycle
+    seasonalities: List[Seasonality] = []
     n_observations: int
 
 
