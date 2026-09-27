@@ -223,7 +223,7 @@ def train_xgboost(
         max_depth=max_depth,
         learning_rate=learning_rate,
         random_state=42,
-        n_jobs=-1
+        n_jobs=1  # Small tabular data: multithreading is ~300x slower (thread contention)
     )
     model.fit(X_train, y_train)
 
