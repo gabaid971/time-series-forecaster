@@ -26,7 +26,7 @@ export interface ModelConfig {
   name: string; // Nom affiché (ex: "XGBoost avec Lags")
   
   // Config spécifique (Union type)
-  params: LagParams | ArimaParams | ProphetParams | XGBoostParams | MLParams | LinearRegressionParams;
+  params: LagParams | ArimaParams | ProphetParams | XGBoostParams | LinearRegressionParams;
 }
 
 export interface LagParams {
@@ -55,16 +55,6 @@ export interface XGBoostParams {
   max_depth?: number;
   learning_rate?: number;
   feature_config?: FeatureConfig;
-}
-
-// Pour les modèles ML génériques (RF, LightGBM)
-export interface MLParams {
-  lags: number[]; // ex: [1, 7, 30]
-  rolling_features: {
-    window_size: number;
-    operation: 'mean' | 'std' | 'min' | 'max';
-  }[];
-  use_exogenous: boolean;
 }
 
 // Feature configuration (new unified structure)

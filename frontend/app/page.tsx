@@ -446,13 +446,6 @@ export default function ForecastingPage() {
     }));
   };
 
-  const parseLagsString = (lagsStr: string): number[] => {
-    return lagsStr
-      .split(',')
-      .map(s => parseInt(s.trim()))
-      .filter(n => !isNaN(n) && n > 0);
-  };
-
   return (
     <div className="min-h-screen font-sans selection:bg-amber-500/30">
       {/* Ambient Background Effects */}
