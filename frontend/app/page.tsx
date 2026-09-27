@@ -12,7 +12,7 @@ import { ShapChart } from '../components/charts';
 import { LagAnalysisPanel } from '../components/LagAnalysisPanel';
 
 // Utilities
-import { getApiUrl, getApiHeaders, API_MODE, BACKEND_URL } from '../lib/api';
+import { getApiUrl, API_HEADERS, getErrorMessage } from '../lib/api';
 import { formatFeatureName, getShapKeyForFeature } from '../lib/formatters';
 
 // Types for advanced analysis
@@ -36,12 +36,6 @@ interface DataAlert {
   category: string;
   message: string;
   details?: Record<string, any>;
-}
-
-// Debug: log API config (check browser console)
-if (typeof window !== 'undefined') {
-  console.log('🔗 API Mode:', API_MODE);
-  console.log('🔗 Backend URL:', BACKEND_URL);
 }
 
 export default function ForecastingPage() {
@@ -80,6 +74,7 @@ export default function ForecastingPage() {
     value_mean: number;
   } | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   
   // Advanced analysis state
   const [lagAnalysis, setLagAnalysis] = useState<LagAnalysis | null>(null);
@@ -144,6 +139,7 @@ export default function ForecastingPage() {
   // Results State
   const [isTraining, setIsTraining] = useState(false);
   const [results, setResults] = useState<ModelResult[]>([]);
+  const [trainError, setTrainError] = useState<string | null>(null);
   
   // SHAP Modal State
   const [shapModal, setShapModal] = useState<{ 
@@ -195,6 +191,8 @@ export default function ForecastingPage() {
     if (!data) return;
     setStep(3);
     setIsTraining(true);
+    setResults([]);
+    setTrainError(null);
     
     try {
       // Get min lag from models to determine forecast mode
@@ -224,12 +222,13 @@ export default function ForecastingPage() {
 
       const response = await fetch(getApiUrl('train'), {
         method: 'POST',
-        headers: getApiHeaders(),
+        headers: API_HEADERS,
         body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
-        throw new Error(`Error: ${response.statusText}`);
+        setTrainError(await getErrorMessage(response));
+        return;
       }
 
       const result = await response.json();
@@ -237,11 +236,11 @@ export default function ForecastingPage() {
       if (result.status === 'success') {
         setResults(result.results);
       } else {
-        console.error('Training failed:', result);
+        setTrainError(result.message || 'Training failed');
       }
     } catch (error) {
       console.error('Failed to connect to backend:', error);
-      // Fallback or error state handling could go here
+      setTrainError('Cannot reach the backend. Is it running?');
     } finally {
       setIsTraining(false);
     }
@@ -315,13 +314,14 @@ export default function ForecastingPage() {
     if (!data || !rawData.length) return;
     
     setIsAnalyzing(true);
+    setAnalyzeError(null);
     setLagAnalysis(null);
     setDataAlerts(null);
     
     try {
       const response = await fetch(getApiUrl('analyze'), {
         method: 'POST',
-        headers: getApiHeaders(),
+        headers: API_HEADERS,
         body: JSON.stringify({
           data: rawData,
           date_column: data.dateColumn,
@@ -329,6 +329,12 @@ export default function ForecastingPage() {
         }),
       });
       
+      if (!response.ok) {
+        setAnalyzeError(await getErrorMessage(response));
+        useLocalFallback();
+        return;
+      }
+
       const result = await response.json();
       if (result.status === 'success' && result.stats) {
         setDatasetStats(result.stats);
@@ -375,13 +381,13 @@ export default function ForecastingPage() {
         }
       } else {
         // Backend returned error, use fallback
-        console.warn('Backend analysis failed, using local fallback');
+        setAnalyzeError(result.message || 'Backend analysis failed');
         useLocalFallback();
       }
     } catch (error) {
       console.error('Failed to analyze dataset:', error);
       // Use local fallback when backend is unreachable
-      console.warn('Backend unreachable, using local fallback for visualization');
+      setAnalyzeError('Cannot reach the backend. Is it running?');
       useLocalFallback();
     } finally {
       setIsAnalyzing(false);
@@ -641,6 +647,11 @@ export default function ForecastingPage() {
                         Dataset Analysis
                         {isAnalyzing && <span className="text-xs text-slate-400 animate-pulse ml-2">Analyzing...</span>}
                       </h4>
+                      {analyzeError && (
+                        <p className="text-xs text-orange-300 bg-orange-500/10 border border-orange-500/20 rounded-lg p-2 mb-3">
+                          ⚠️ {analyzeError} — showing basic local stats only.
+                        </p>
+                      )}
                       {datasetStats ? (
                         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
                           <div className="bg-black/20 rounded-lg p-3">
@@ -772,6 +783,13 @@ export default function ForecastingPage() {
                   </div>
                 ) : (
                   <div className="h-full flex flex-col gap-4 sm:gap-6">
+                    {/* Global training error (request rejected, backend unreachable...) */}
+                    {trainError && (
+                      <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-sm text-red-300">
+                        ❌ {trainError}
+                      </div>
+                    )}
+
                     {/* Best Model Card */}
                     {results.length > 0 && (() => {
                       // Find the model with minimum RMSE

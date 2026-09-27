@@ -4,9 +4,9 @@ Refactored: modular structure with clean separation of concerns.
 """
 
 import os
-import secrets
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import polars as pl
@@ -63,11 +63,21 @@ except ImportError:
     PROPHET_AVAILABLE = False
     print("⚠️ Prophet not installed. Prophet model will be unavailable.")
 
-API_KEY = os.environ.get("API_KEY", "")
+# The API is public (demo app): protection is about limiting abuse, not access.
+# ALLOWED_ORIGINS: comma-separated list of frontend origins allowed by browsers (CORS).
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    if origin.strip()
+]
+MAX_BODY_MB = float(os.environ.get("MAX_BODY_MB", "20"))
+MAX_ROWS = int(os.environ.get("MAX_ROWS", "100000"))
+MAX_MODELS = int(os.environ.get("MAX_MODELS", "10"))
 
-def verify_api_key(x_api_key: str = Header(...)):
-    if not secrets.compare_digest(x_api_key, API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid API Key")
+
+def check_dataset_size(n_rows: int) -> None:
+    if n_rows > MAX_ROWS:
+        raise HTTPException(status_code=413, detail=f"Dataset too large: {n_rows} rows (max {MAX_ROWS})")
 
 # ============================================================================
 # SCHEMAS (Pydantic models for API request/response)
@@ -198,14 +208,25 @@ class DatasetAnalysisResponse(BaseModel):
 
 app = FastAPI(title="Time Series Forecaster API", version="2.0.0")
 
-# CORS
+# CORS: only browsers on these origins may call the API (does not stop non-browser clients)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
+
+
+@app.middleware("http")
+async def limit_body_size(request: Request, call_next):
+    """Reject oversized requests before reading/parsing their body."""
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_BODY_MB * 1024 * 1024:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": f"Request too large (max {MAX_BODY_MB:g} MB)"}
+        )
+    return await call_next(request)
 
 # ============================================================================
 # API ENDPOINTS
@@ -222,11 +243,12 @@ async def health():
     return {"status": "healthy"}
 
 @app.post("/analyze", response_model=DatasetAnalysisResponse)
-async def analyze_dataset(request: DatasetAnalysisRequest, _: None = Depends(verify_api_key)):
+async def analyze_dataset(request: DatasetAnalysisRequest):
     """
     Analyze a dataset and return statistics.
     Auto-detects frequency, missing values, date range, etc.
     """
+    check_dataset_size(len(request.data))
     try:
         df = pl.DataFrame(request.data, infer_schema_length=None)
         date_col = request.date_column
@@ -432,11 +454,14 @@ async def analyze_dataset(request: DatasetAnalysisRequest, _: None = Depends(ver
 
 
 @app.post("/train", response_model=TrainingResponse)
-async def train_models(request: TrainingRequest, _: None = Depends(verify_api_key)):
+async def train_models(request: TrainingRequest):
     """
     Main training endpoint.
     Receives data + config, trains requested models, returns predictions + metrics.
     """
+    check_dataset_size(len(request.data))
+    if len(request.models) > MAX_MODELS:
+        raise HTTPException(status_code=413, detail=f"Too many models: {len(request.models)} (max {MAX_MODELS})")
     try:
         df = pl.DataFrame(request.data, infer_schema_length=None)
         
